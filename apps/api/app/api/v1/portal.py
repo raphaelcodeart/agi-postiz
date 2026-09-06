@@ -1,0 +1,436 @@
+"""
+Portal API - the surface end users see when they sign in on our own dashboard.
+
+Deliberately a SEPARATE router rather than tenancy retrofitted onto the existing
+admin endpoints. Those endpoints were written on the assumption that the caller
+sees everything (``get_current_admin``), and every one of them would have to be
+audited and re-tested to be safe for an end user; one missed filter is a data
+leak between customers. A small purpose-built surface that can only ever read
+the authenticated user's own rows is far easier to keep correct - and to review.
+
+Two rules hold everywhere in this file:
+
+1. Every query filters on ``current_user.id``. The user id is taken from the
+   validated token, never from a path or body parameter, so there is no
+   identifier for a caller to tamper with.
+2. Nothing here exposes a credential, not even indirectly - no API keys, no
+   encrypted blobs, no provider tokens (AGENTS.md rules 8-10).
+"""
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.core.security import TOKEN_TYPE_PORTAL_USER, SecurityService
+from app.db.session import get_db
+from app.integrations.providers import PROVIDER_LABELS
+from app.models.buffer import BufferConnection, BufferOrganization, SocialChannel
+from app.models.campaign import Campaign, CampaignTarget
+from app.models.publication import Publication
+from app.models.statistics import StatPostMetric
+from app.models.user import User
+
+router = APIRouter()
+
+portal_oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl=f"{settings.API_V1_STR}/portal/auth/login",
+    auto_error=False,
+)
+
+
+# --------------------------------------------------------------------------
+# Schemas
+# --------------------------------------------------------------------------
+
+class PortalRegisterRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=255)
+    email: EmailStr
+    password: str = Field(min_length=10, max_length=200)
+    company_name: Optional[str] = Field(default=None, max_length=255)
+
+
+class PortalLoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class PortalTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class PortalUserResponse(BaseModel):
+    id: str
+    name: str
+    email: str
+    company_name: Optional[str]
+    status: str
+    # False until an administrator activates the account. The dashboard uses it
+    # to explain why a freshly registered user is not in any campaign yet.
+    is_active_for_campaigns: bool
+    referral_link: Optional[str]
+    created_at: datetime
+
+
+class PortalChannelResponse(BaseModel):
+    id: str
+    platform: str
+    name: str
+    username: Optional[str]
+    avatar_url: Optional[str]
+    external_link: Optional[str]
+    is_active: bool
+    publication_mode: str
+    provider: str
+    provider_label: str
+    last_sync_at: Optional[datetime]
+
+
+class PortalCampaignResponse(BaseModel):
+    id: str
+    title: str
+    status: str
+    created_at: datetime
+    # This user's own slice of the campaign, never the campaign-wide totals:
+    # a promoter has no business seeing how other promoters performed.
+    channels_targeted: int
+    published: int
+    failed: int
+    pending: int
+
+
+class PortalStatsResponse(BaseModel):
+    channels_connected: int
+    channels_by_provider: Dict[str, int]
+    campaigns_joined: int
+    posts_published: int
+    posts_failed: int
+    total_impressions: int
+    total_likes: int
+    total_comments: int
+    total_shares: int
+    total_views: int
+    total_reach: int
+
+
+# --------------------------------------------------------------------------
+# Authentication
+# --------------------------------------------------------------------------
+
+def get_current_portal_user(
+    db: Session = Depends(get_db),
+    token: Optional[str] = Depends(portal_oauth2_scheme),
+) -> User:
+    """
+    Resolve the signed-in end user.
+
+    Rejects administrator tokens: ``verify_access_token`` is asked for the
+    portal audience specifically, so a valid admin JWT does not authenticate
+    here (and vice versa - see core/security.py).
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Sessione non valida o scaduta.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    if not token:
+        raise credentials_exception
+
+    user_id = SecurityService.verify_access_token(token, expected_type=TOKEN_TYPE_PORTAL_USER)
+    if not user_id:
+        raise credentials_exception
+
+    user = db.query(User).filter(
+        User.id == user_id,
+        User.deleted_at.is_(None),
+    ).first()
+
+    if not user or not user.password_hash:
+        raise credentials_exception
+
+    if user.status == "suspended":
+        raise HTTPException(status_code=403, detail="Account sospeso. Contatta l'amministratore.")
+
+    return user
+
+
+@router.post("/auth/register", response_model=PortalTokenResponse, status_code=status.HTTP_201_CREATED)
+def register(payload: PortalRegisterRequest, db: Session = Depends(get_db)):
+    """
+    Self-service registration.
+
+    A new account starts ``status="inactive"``: that is what keeps it out of
+    campaign targeting until an administrator vets it (see the note on
+    ``User.self_registered_at``). The user can sign in immediately, connect
+    their channels and see their dashboard - they simply are not published to
+    yet.
+    """
+    email = payload.email.lower().strip()
+    existing = db.query(User).filter(func.lower(User.email) == email).first()
+
+    if existing:
+        # An administrator may already have created this person, without portal
+        # credentials. Let them claim that account rather than being blocked by
+        # a row they cannot see - but never overwrite an existing password, or
+        # this endpoint would be an account takeover.
+        if existing.password_hash or existing.deleted_at is not None:
+            raise HTTPException(status_code=409, detail="Esiste già un account con questa email.")
+        existing.password_hash = SecurityService.hash_password(payload.password)
+        existing.self_registered_at = datetime.now(timezone.utc)
+        if payload.company_name:
+            existing.company_name = payload.company_name
+        user = existing
+    else:
+        user = User(
+            name=payload.name.strip(),
+            email=email,
+            company_name=payload.company_name,
+            status="inactive",
+            password_hash=SecurityService.hash_password(payload.password),
+            self_registered_at=datetime.now(timezone.utc),
+        )
+        db.add(user)
+
+    user.last_login_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(user)
+
+    return PortalTokenResponse(
+        access_token=SecurityService.create_access_token(
+            subject=user.id, token_type=TOKEN_TYPE_PORTAL_USER
+        )
+    )
+
+
+@router.post("/auth/login", response_model=PortalTokenResponse)
+def login(payload: PortalLoginRequest, db: Session = Depends(get_db)):
+    email = payload.email.lower().strip()
+    user = db.query(User).filter(
+        func.lower(User.email) == email,
+        User.deleted_at.is_(None),
+    ).first()
+
+    # Same message whether the address is unknown or the password is wrong, so
+    # this endpoint cannot be used to enumerate registered users.
+    invalid = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Email o password non corretti.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    if not user or not user.password_hash:
+        raise invalid
+    if not SecurityService.verify_password(payload.password, user.password_hash):
+        raise invalid
+    if user.status == "suspended":
+        raise HTTPException(status_code=403, detail="Account sospeso. Contatta l'amministratore.")
+
+    user.last_login_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return PortalTokenResponse(
+        access_token=SecurityService.create_access_token(
+            subject=user.id, token_type=TOKEN_TYPE_PORTAL_USER
+        )
+    )
+
+
+@router.get("/me", response_model=PortalUserResponse)
+def get_me(current_user: User = Depends(get_current_portal_user)):
+    return PortalUserResponse(
+        id=str(current_user.id),
+        name=current_user.name,
+        email=current_user.email,
+        company_name=current_user.company_name,
+        status=current_user.status,
+        is_active_for_campaigns=current_user.status == "active",
+        referral_link=current_user.referral_link,
+        created_at=current_user.created_at,
+    )
+
+
+# --------------------------------------------------------------------------
+# Channels
+# --------------------------------------------------------------------------
+
+def _user_channels_query(db: Session, user: User):
+    """
+    Channels belonging to this user, across every provider.
+
+    Ownership runs channel -> organization -> connection -> user, so the join is
+    the access control: there is no path here to another user's rows.
+    """
+    return (
+        db.query(SocialChannel)
+        .join(BufferOrganization, SocialChannel.buffer_organization_id == BufferOrganization.id)
+        .join(BufferConnection, BufferOrganization.buffer_connection_id == BufferConnection.id)
+        .filter(BufferConnection.user_id == user.id)
+    )
+
+
+@router.get("/channels", response_model=List[PortalChannelResponse])
+def list_my_channels(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_portal_user),
+):
+    channels = _user_channels_query(db, current_user).order_by(SocialChannel.platform).all()
+    return [
+        PortalChannelResponse(
+            id=str(c.id),
+            platform=c.platform,
+            name=c.name,
+            username=c.username,
+            avatar_url=c.avatar_url,
+            external_link=c.external_link,
+            is_active=c.is_active,
+            publication_mode=c.publication_mode,
+            provider=c.provider,
+            provider_label=PROVIDER_LABELS.get(c.provider, c.provider),
+            last_sync_at=c.last_sync_at,
+        )
+        for c in channels
+    ]
+
+
+# --------------------------------------------------------------------------
+# Campaigns and statistics
+# --------------------------------------------------------------------------
+
+@router.get("/campaigns", response_model=List[PortalCampaignResponse])
+def list_my_campaigns(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_portal_user),
+):
+    """
+    Campaigns this user takes part in, with their own outcome only.
+
+    Scoped through ``campaign_targets.user_id``: a campaign the user was never
+    targeted by simply does not appear, and the counters below are filtered by
+    the same user id rather than aggregated campaign-wide.
+    """
+    campaign_ids = [
+        row[0]
+        for row in db.query(CampaignTarget.campaign_id)
+        .filter(CampaignTarget.user_id == current_user.id)
+        .distinct()
+        .all()
+    ]
+    if not campaign_ids:
+        return []
+
+    campaigns = (
+        db.query(Campaign)
+        .filter(Campaign.id.in_(campaign_ids))
+        .order_by(Campaign.created_at.desc())
+        .all()
+    )
+
+    counts = dict(
+        db.query(CampaignTarget.campaign_id, func.count(CampaignTarget.id))
+        .filter(CampaignTarget.user_id == current_user.id)
+        .group_by(CampaignTarget.campaign_id)
+        .all()
+    )
+
+    status_rows = (
+        db.query(Publication.campaign_id, Publication.status, func.count(Publication.id))
+        .filter(
+            Publication.user_id == current_user.id,
+            Publication.campaign_id.in_(campaign_ids),
+        )
+        .group_by(Publication.campaign_id, Publication.status)
+        .all()
+    )
+    by_campaign: Dict[Any, Dict[str, int]] = {}
+    for campaign_id, pub_status, count in status_rows:
+        by_campaign.setdefault(campaign_id, {})[pub_status] = count
+
+    result = []
+    for campaign in campaigns:
+        statuses = by_campaign.get(campaign.id, {})
+        published = statuses.get("published", 0) + statuses.get("scheduled", 0)
+        failed = statuses.get("failed", 0)
+        pending = sum(
+            count for key, count in statuses.items()
+            if key in ("pending", "queued", "processing", "retry_wait")
+        )
+        result.append(
+            PortalCampaignResponse(
+                id=str(campaign.id),
+                title=campaign.title,
+                status=campaign.status,
+                created_at=campaign.created_at,
+                channels_targeted=counts.get(campaign.id, 0),
+                published=published,
+                failed=failed,
+                pending=pending,
+            )
+        )
+    return result
+
+
+@router.get("/stats", response_model=PortalStatsResponse)
+def get_my_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_portal_user),
+):
+    """
+    Headline figures for the user's own dashboard.
+
+    Reads the same persisted ``stat_post_metrics`` the admin statistics module
+    fills, filtered to this user - so the numbers a promoter sees always agree
+    with what the administrator sees for them, and no upstream call is made
+    while rendering a dashboard.
+    """
+    channels = _user_channels_query(db, current_user).all()
+    channels_by_provider: Dict[str, int] = {}
+    for channel in channels:
+        label = PROVIDER_LABELS.get(channel.provider, channel.provider)
+        channels_by_provider[label] = channels_by_provider.get(label, 0) + 1
+
+    campaigns_joined = (
+        db.query(func.count(func.distinct(CampaignTarget.campaign_id)))
+        .filter(CampaignTarget.user_id == current_user.id)
+        .scalar()
+        or 0
+    )
+
+    status_counts = dict(
+        db.query(Publication.status, func.count(Publication.id))
+        .filter(Publication.user_id == current_user.id)
+        .group_by(Publication.status)
+        .all()
+    )
+
+    totals = (
+        db.query(
+            func.coalesce(func.sum(StatPostMetric.impressions), 0),
+            func.coalesce(func.sum(StatPostMetric.likes), 0),
+            func.coalesce(func.sum(StatPostMetric.comments), 0),
+            func.coalesce(func.sum(StatPostMetric.shares), 0),
+            func.coalesce(func.sum(StatPostMetric.views), 0),
+            func.coalesce(func.sum(StatPostMetric.reach), 0),
+        )
+        .filter(StatPostMetric.user_id == current_user.id)
+        .one()
+    )
+
+    return PortalStatsResponse(
+        channels_connected=len([c for c in channels if c.is_active]),
+        channels_by_provider=channels_by_provider,
+        campaigns_joined=campaigns_joined,
+        posts_published=status_counts.get("published", 0) + status_counts.get("scheduled", 0),
+        posts_failed=status_counts.get("failed", 0),
+        total_impressions=int(totals[0] or 0),
+        total_likes=int(totals[1] or 0),
+        total_comments=int(totals[2] or 0),
+        total_shares=int(totals[3] or 0),
+        total_views=int(totals[4] or 0),
+        total_reach=int(totals[5] or 0),
+    )

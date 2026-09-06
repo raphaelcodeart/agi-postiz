@@ -6,6 +6,7 @@ from app.api.v1 import blog_writer_sites, blog_writer_articles
 from app.api.v1 import omnichannel, omnichannel_webhooks
 from app.api.v1 import statistics
 from app.api.v1 import public_stats
+from app.api.v1 import portal
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -47,6 +48,9 @@ app.include_router(omnichannel.router, prefix=f"{settings.API_V1_STR}/omnichanne
 app.include_router(omnichannel_webhooks.router, prefix=f"{settings.API_V1_STR}/omnichannel-responder", tags=["omnichannel-responder"])
 app.include_router(statistics.router, prefix=f"{settings.API_V1_STR}/statistics", tags=["statistics"])
 app.include_router(public_stats.router, prefix=f"{settings.API_V1_STR}/public/stats", tags=["public"])
+# Portale utenti finali: superficie separata da quella admin, ogni query e'
+# filtrata sull'utente autenticato (vedi app/api/v1/portal.py).
+app.include_router(portal.router, prefix=f"{settings.API_V1_STR}/portal", tags=["portal"])
 
 @app.get("/")
 def read_root():
