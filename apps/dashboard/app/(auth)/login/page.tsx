@@ -57,7 +57,7 @@ function LoginForm() {
         <div className="glow-primary animate-float mb-1 flex size-10 items-center justify-center rounded-lg bg-brand-gradient text-primary-foreground">
           <RssIcon className="size-5" />
         </div>
-        <CardTitle className="gradient-text text-xl">Social Publisher</CardTitle>
+        <CardTitle className="gradient-text text-xl">Agi Post</CardTitle>
         <CardDescription>Accedi alla dashboard amministrativa</CardDescription>
       </CardHeader>
       <CardContent>

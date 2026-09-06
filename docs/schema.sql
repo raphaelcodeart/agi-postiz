@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Dump di sola STRUTTURA (schema-only, zero dati/righe) del database
--- "social_publisher" — generato con:
---   pg_dump -U postgres -d social_publisher --schema-only --no-owner --no-privileges
+-- "agi_post" — generato con:
+--   pg_dump -U postgres -d agi_post --schema-only --no-owner --no-privileges
 --
 -- Snapshot generato: 2026-08-26 21:45 UTC, dal server di produzione di questo
 -- progetto, alla revisione Alembic "e5f6a7b8c9d0" (head) - `SELECT version_num
@@ -23,7 +23,7 @@
 -- manuale, non per un restore.
 --
 -- Per rigenerarlo dopo un cambiamento reale di schema:
---   docker exec <container_db> pg_dump -U postgres -d social_publisher \
+--   docker exec <container_db> pg_dump -U postgres -d agi_post \
 --     --schema-only --no-owner --no-privileges > docs/schema.sql
 -- (poi ripeti manualmente la pulizia delle righe \restrict/\unrestrict,
 -- token casuali per esecuzione introdotti da pg_dump 16.10+, privi di

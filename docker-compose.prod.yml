@@ -4,7 +4,7 @@ name: agi-postiz
 services:
   db:
     image: postgres:16-alpine
-    container_name: social_publisher_db_prod
+    container_name: agi_post_db_prod
     restart: always
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -20,7 +20,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: social_publisher_redis_prod
+    container_name: agi_post_redis_prod
     restart: always
     volumes:
       - redis_data_prod:/data
@@ -34,7 +34,7 @@ services:
     build:
       context: ./apps/api
       dockerfile: Dockerfile
-    container_name: social_publisher_api_prod
+    container_name: agi_post_api_prod
     restart: always
     depends_on:
       db:
@@ -51,7 +51,7 @@ services:
     build:
       context: ./apps/api
       dockerfile: Dockerfile
-    container_name: social_publisher_worker_prod
+    container_name: agi_post_worker_prod
     restart: always
     depends_on:
       db:
@@ -68,7 +68,7 @@ services:
     build:
       context: ./apps/api
       dockerfile: Dockerfile
-    container_name: social_publisher_beat_prod
+    container_name: agi_post_beat_prod
     restart: always
     depends_on:
       db:
@@ -86,7 +86,7 @@ services:
       context: .
       dockerfile: apps/dashboard/Dockerfile
       target: production
-    container_name: social_publisher_dashboard_prod
+    container_name: agi_post_dashboard_prod
     restart: always
     depends_on:
       - api
@@ -99,7 +99,7 @@ services:
 
   nginx:
     image: nginx:1.25-alpine
-    container_name: social_publisher_nginx_prod
+    container_name: agi_post_nginx_prod
     restart: always
     ports:
       - "80:80"
@@ -118,7 +118,7 @@ services:
   # by scripts/setup-https.sh (initial issuance and renewal). See docs/DEPLOYMENT.md section 9.
   certbot:
     image: certbot/certbot:latest
-    container_name: social_publisher_certbot_prod
+    container_name: agi_post_certbot_prod
     command: ["--version"]
     volumes:
       - certbot_www:/var/www/certbot

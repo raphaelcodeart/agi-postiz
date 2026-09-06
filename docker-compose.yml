@@ -4,25 +4,25 @@ name: agi-postiz
 services:
   db:
     image: postgres:16-alpine
-    container_name: social_publisher_db
+    container_name: agi_post_db
     restart: always
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_secure_pass_123}
-      POSTGRES_DB: ${POSTGRES_DB:-social_publisher}
+      POSTGRES_DB: ${POSTGRES_DB:-agi_post}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-social_publisher}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-agi_post}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
-    container_name: social_publisher_redis
+    container_name: agi_post_redis
     restart: always
     ports:
       - "6379:6379"
@@ -38,7 +38,7 @@ services:
     build:
       context: ./apps/api
       dockerfile: Dockerfile
-    container_name: social_publisher_api
+    container_name: agi_post_api
     restart: always
     depends_on:
       db:
@@ -58,7 +58,7 @@ services:
     build:
       context: ./apps/api
       dockerfile: Dockerfile
-    container_name: social_publisher_worker
+    container_name: agi_post_worker
     restart: always
     depends_on:
       db:
@@ -76,7 +76,7 @@ services:
     build:
       context: ./apps/api
       dockerfile: Dockerfile
-    container_name: social_publisher_beat
+    container_name: agi_post_beat
     restart: always
     depends_on:
       db:
@@ -95,7 +95,7 @@ services:
       context: .
       dockerfile: apps/dashboard/Dockerfile
       target: dev
-    container_name: social_publisher_dashboard
+    container_name: agi_post_dashboard
     restart: always
     depends_on:
       - api
@@ -115,7 +115,7 @@ services:
 
   nginx:
     image: nginx:1.25-alpine
-    container_name: social_publisher_nginx
+    container_name: agi_post_nginx
     restart: always
     ports:
       - "80:80"

@@ -10,7 +10,7 @@ class Settings(BaseSettings):
 
     # General
     ENVIRONMENT: str = "local"
-    PROJECT_NAME: str = "Multi-Tenant Social Publishing Platform"
+    PROJECT_NAME: str = "Agi Post"
     API_V1_STR: str = "/api/v1"
 
     # Security
@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
     # Databases
-    DATABASE_URL: str = Field(default="postgresql+psycopg://postgres:postgres_secure_pass_123@db:5432/social_publisher")
+    DATABASE_URL: str = Field(default="postgresql+psycopg://postgres:postgres_secure_pass_123@db:5432/agi_post")
     REDIS_URL: str = Field(default="redis://redis:6379/0")
 
     # Buffer API - connections authenticate with a per-user personal API key

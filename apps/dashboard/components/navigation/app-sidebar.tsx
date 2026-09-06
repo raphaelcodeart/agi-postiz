@@ -71,7 +71,7 @@ export function AppSidebar() {
             <Rss className="size-4" />
           </div>
           <div className="min-w-0 group-data-[collapsible=icon]:hidden">
-            <p className="gradient-text truncate text-sm font-semibold">Social Publisher Buffer</p>
+            <p className="gradient-text truncate text-sm font-semibold">Agi Post</p>
             <p className="truncate text-xs text-muted-foreground">Admin Console</p>
           </div>
         </div>

@@ -20,7 +20,7 @@ if [ -f .env ]; then
 fi
 
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
-POSTGRES_DB="${POSTGRES_DB:-social_publisher}"
+POSTGRES_DB="${POSTGRES_DB:-agi_post}"
 
 mkdir -p backups
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"

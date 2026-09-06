@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "social-publisher-api"
+name = "agi-post-api"
 version = "0.1.0"
 description = "FastAPI backend for Multi-Tenant Social Publishing Platform"
 readme = "README.md"

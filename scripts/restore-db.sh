@@ -26,7 +26,7 @@ if [ -f .env ]; then
 fi
 
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
-POSTGRES_DB="${POSTGRES_DB:-social_publisher}"
+POSTGRES_DB="${POSTGRES_DB:-agi_post}"
 
 echo "About to restore '${DUMP_FILE}' into database '${POSTGRES_DB}' (service '${DB_SERVICE}')."
 echo "This will DROP and recreate existing objects found in the dump."

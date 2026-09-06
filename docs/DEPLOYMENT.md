@@ -122,8 +122,8 @@ git push -u origin main
 Sul server:
 
 ```bash
-git clone https://github.com/raphaelcodeart/agi-postiz.git social-publisher
-cd social-publisher
+git clone https://github.com/raphaelcodeart/agi-postiz.git agi-post
+cd agi-post
 ```
 
 ### Opzione B — Copia diretta (senza Git)
@@ -133,7 +133,7 @@ Se non vuoi usare Git, copia i file direttamente da Windows al server con `scp` 
 ```bash
 # Attenzione: NON copiare node_modules, .next, __pycache__ (sono pesanti e si rigenerano da soli)
 rsync -avz --exclude 'node_modules' --exclude '.next' --exclude '__pycache__' --exclude '.venv' \
-  /e/Clienti/AgentMultiPost/ utente@IP_DEL_SERVER:~/social-publisher/
+  /e/Clienti/AgentMultiPost/ utente@IP_DEL_SERVER:~/agi-post/
 ```
 
 Se `rsync` non è disponibile su Windows, usa `scp -r` (più lento, copia tutto compresi i file inutili — poi cancellali sul server con `rm -rf node_modules apps/*/node_modules apps/dashboard/.next`).
@@ -147,7 +147,7 @@ Se `rsync` non è disponibile su Windows, usa `scp -r` (più lento, copia tutto 
 Il progetto ha **un solo file `.env` nella cartella principale**, condiviso da backend e frontend (Docker lo carica automaticamente in entrambi i container).
 
 ```bash
-cd ~/social-publisher   # o il nome che hai dato alla cartella
+cd ~/agi-post   # o il nome che hai dato alla cartella
 cp .env.example .env
 nano .env
 ```
@@ -228,6 +228,35 @@ git push
 ```
 
 Da quel momento, `alembic upgrade head` su qualunque ambiente applicherà anche la nuova migration insieme a tutte le precedenti.
+
+---
+
+### Nota: rinomina del database su questo server
+
+Questo deployment e' nato quando il progetto si chiamava ancora diversamente, quindi il suo
+database si chiama tuttora `social_publisher`, mentre tutto il resto del progetto (e i default
+qui documentati) usa `agi_post`. Le due cose convivono senza problemi perche' il nome reale
+arriva dal `.env`, che ha la precedenza sui default.
+
+Per allinearlo, una volta sola, con lo stack in esecuzione:
+
+```bash
+cd /opt/agi-postiz
+docker compose -f docker-compose.prod.yml stop api worker beat dashboard
+docker compose -f docker-compose.prod.yml exec db \
+  psql -U postgres -d postgres -c "ALTER DATABASE social_publisher RENAME TO agi_post;"
+
+# poi aggiorna le due righe corrispondenti nel .env:
+sed -i 's/^POSTGRES_DB=.*/POSTGRES_DB=agi_post/' .env
+sed -i 's|@db:5432/social_publisher|@db:5432/agi_post|' .env
+
+docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml exec nginx nginx -s reload
+curl -s https://api.46-225-185-149.sslip.io/api/v1/settings/health
+```
+
+L'ultimo comando deve rispondere `"database":"ok"`. Su un'installazione nuova non serve niente
+di tutto questo: il database nasce gia' con il nome corretto.
 
 ---
 
@@ -392,7 +421,7 @@ Consigli pratici:
   ```bash
   crontab -e
   # aggiungi questa riga (backup ogni notte alle 3:00):
-  0 3 * * * cd ~/social-publisher && ./scripts/backup-db.sh >> backups/backup.log 2>&1
+  0 3 * * * cd ~/agi-post && ./scripts/backup-db.sh >> backups/backup.log 2>&1
   ```
 
 ### Backup settimanale automatico (già in uso in produzione su questo server)

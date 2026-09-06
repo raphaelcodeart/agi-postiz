@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Social Publisher Admin",
+  title: "Agi Post",
   description: "Dashboard amministrativa per la piattaforma multi-tenant di pubblicazione social.",
 };
 
