@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { Loader2Icon } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Loader2Icon, RefreshCwIcon } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,8 +30,46 @@ const PLATFORMS = [
 ];
 
 export function ConnectChannelPanel() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [pendingPlatform, setPendingPlatform] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+
+  const sync = useCallback(
+    async (silent: boolean) => {
+      setSyncing(true);
+      try {
+        const response = await fetch("/api/portal/backend/connect/sync", { method: "POST" });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          setMessage(payload?.detail ?? "Aggiornamento non riuscito.");
+          return;
+        }
+        // Silent on the automatic pass: the freshly imported channel appearing
+        // in the list below is the confirmation, a banner on top of it is noise.
+        if (!silent || payload?.channels === 0) {
+          setMessage(payload?.message ?? null);
+        }
+        router.refresh();
+      } catch {
+        setMessage("Servizio non raggiungibile. Riprova fra poco.");
+      } finally {
+        setSyncing(false);
+      }
+    },
+    [router]
+  );
+
+  // The hosted flow finishes on the provider's site, so returning here is the
+  // only signal that a channel may now exist. Without this the user comes back
+  // to a page that looks exactly as they left it.
+  useEffect(() => {
+    if (searchParams.get("connected") === "1") {
+      void sync(true);
+      router.replace("/portal/channels");
+    }
+  }, [searchParams, sync, router]);
 
   async function connect(platform: string) {
     setMessage(null);
@@ -60,11 +99,21 @@ export function ConnectChannelPanel() {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Collega un canale</CardTitle>
-        <CardDescription>
-          Scegli la piattaforma: ti portiamo sul sito del social per autorizzare, poi torni qui.
-        </CardDescription>
+      <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1.5">
+          <CardTitle className="text-base">Collega un canale</CardTitle>
+          <CardDescription>
+            Scegli la piattaforma: ti portiamo sul sito del social per autorizzare, poi torni qui.
+          </CardDescription>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => sync(false)} disabled={syncing}>
+          {syncing ? (
+            <Loader2Icon className="size-4 animate-spin" />
+          ) : (
+            <RefreshCwIcon className="size-4" />
+          )}
+          Aggiorna
+        </Button>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {message && (

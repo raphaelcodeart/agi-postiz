@@ -542,3 +542,50 @@ def create_connect_link(
         raise HTTPException(status_code=502, detail=f"Collegamento non riuscito: {e.message}")
 
     return ConnectLinkResponse(url=url)
+
+
+class ConnectSyncResponse(BaseModel):
+    channels: int
+    message: str
+
+
+@router.post("/connect/sync", response_model=ConnectSyncResponse)
+def sync_my_channels(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_portal_user),
+):
+    """
+    Import the channels the user just authorised.
+
+    The hosted OAuth flow finishes on the provider's own site, so nothing tells
+    us a channel appeared: authorising creates it upstream, and until we pull it
+    in, the user comes back to a page that looks unchanged. That is the gap this
+    closes, and it is why the channels page calls it on return from the flow.
+
+    Runs inline rather than through Celery on purpose: it is one or two upstream
+    calls, and the point is that the user sees the channel immediately instead of
+    reloading until a worker catches up.
+    """
+    connection = db.query(BufferConnection).filter(
+        BufferConnection.user_id == current_user.id,
+        BufferConnection.provider == PROVIDER_BUNDLE_SOCIAL,
+    ).first()
+
+    if not connection or not connection.provider_account_ref:
+        return ConnectSyncResponse(channels=0, message="Nessun collegamento da sincronizzare.")
+
+    from app.tasks.sync import sync_buffer_connection
+
+    try:
+        sync_buffer_connection(str(connection.id))
+    except Exception as exc:  # noqa: BLE001 - surfaced to the user, not swallowed
+        raise HTTPException(status_code=502, detail=f"Sincronizzazione non riuscita: {exc}")
+
+    count = _user_channels_query(db, current_user).filter(
+        SocialChannel.provider == PROVIDER_BUNDLE_SOCIAL
+    ).count()
+
+    return ConnectSyncResponse(
+        channels=count,
+        message="Canali aggiornati." if count else "Nessun canale trovato: completa l'autorizzazione sul social.",
+    )
