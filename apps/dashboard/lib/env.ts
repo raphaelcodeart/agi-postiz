@@ -20,6 +20,16 @@ export function getJwtSecret(): string {
 
 export const SESSION_COOKIE_NAME = "session_token";
 
+/**
+ * Separate cookie for end-user portal sessions.
+ *
+ * Deliberately not the same cookie as the admin session: the two are different
+ * audiences on the backend (see `typ` in apps/api/app/core/security.py), and one
+ * person can legitimately hold both - an administrator testing the portal would
+ * otherwise sign themselves out of the admin dashboard by signing in as a user.
+ */
+export const PORTAL_SESSION_COOKIE_NAME = "portal_session_token";
+
 export function isMockApiEnabled(): boolean {
   return process.env.NEXT_PUBLIC_USE_MOCK_API === "true" && process.env.NODE_ENV !== "production";
 }

@@ -18,6 +18,8 @@ Il modulo **Statistiche** (dashboard persistita delle metriche Buffer per promot
 2. [Autenticazione amministratori](#2-autenticazione-amministratori)
 3. [Utenti, gruppi e canali](#3-utenti-gruppi-e-canali)
 4. [Integrazione Buffer: mock vs production](#4-integrazione-buffer-mock-vs-production)
+4-bis. [Provider di pubblicazione (Buffer e non solo)](#4-bis-provider-di-pubblicazione-buffer-e-non-solo)
+4-ter. [Portale utenti finali](#4-ter-portale-utenti-finali)
 5. [Campagne: targeting e testo](#5-campagne-targeting-e-testo)
 6. [Ciclo di vita di una pubblicazione](#6-ciclo-di-vita-di-una-pubblicazione)
 7. [Rate limiting verso Buffer](#7-rate-limiting-verso-buffer)
@@ -86,6 +88,87 @@ Cose specifiche del client production, da non "correggere" per errore:
 - Instagram richiede `metadata.instagram.type`/`shouldShareToFeed`; `type` è `"post"` di default ma diventa `"reel"` per video oltre 60s (vedi §5 sotto per il perché).
 - Facebook richiede `metadata.facebook.type` (`post`/`story`/`reel`) e `metadata.facebook.annotations` (lista, inviata vuota perché il progetto non calcola menzioni/link annotati) — senza questi campi Buffer rifiuta il post con "Facebook posts require a type (post, story, or reel)".
 - Le miniature video personalizzate **non vengono mai inviate a Buffer**: l'API reale rifiuta `VideoAssetInput.thumbnailUrl`. Le miniature generate da questo progetto (via ffmpeg) servono solo per l'anteprima interna nella dashboard.
+
+---
+
+## 4-bis. Provider di pubblicazione (Buffer e non solo)
+
+Dal commit "astrae il livello di pubblicazione dal singolo fornitore", Buffer non
+e' piu' l'unico canale verso l'esterno. Un canale social porta scritto **da dove
+arriva** (`social_channels.provider`), e il client viene scelto al momento della
+chiamata invece che da una variabile globale.
+
+Il punto chiave e' che **niente altro nel sistema lo sa**: `campaign_targets`,
+`publications` e `stat_post_metrics` referenziano tutte `social_channels.id` e
+non hanno mai conosciuto l'origine del canale. Campagne, pubblicazioni e
+statistiche funzionano identiche a prima.
+
+`app/integrations/providers.py` concentra le due cose che cambiano davvero fra un
+fornitore e l'altro:
+
+| | Buffer | Fornitore multi-tenant (es. bundle.social) |
+|---|---|---|
+| Chiave usata | quella personale dell'**utente**, cifrata sulla sua connessione | una sola chiave di **piattaforma**, nostra |
+| Come si identifica l'utente | la chiave stessa | id di team (`provider_account_ref`) |
+| Quota upstream | una per utente, indipendente | **una sola condivisa da tutti** |
+
+L'ultima riga e' la piu' insidiosa e va tenuta a mente in ogni modifica futura al
+rate limiter: 3.000 canali su chiave condivisa sono **una coda sola**, non 3.000
+indipendenti. Per questo `RateLimiter` non lavora piu' per `connection_id` ma per
+*scope* (`ProviderContext.rate_limit_scope`), con un tetto di concorrenza
+dedicato e la pausa dopo un 429 estesa a tutto il fornitore. Stessa logica nello
+scaglionamento della lettura metriche in `tasks/statistics.py`.
+
+Un utente puo' avere connessioni su piu' fornitori contemporaneamente (vincolo
+`uq_buffer_connection_user_provider` su `user_id, provider`): utile per superare
+il tetto di 3 canali del piano gratuito Buffer, tenendone alcuni li' e collegando
+gli altri direttamente.
+
+Aggiungere un fornitore significa scrivere una classe che implementa i sei metodi
+di `BaseBufferClient` e un ramo in `_build_client`. Nient'altro.
+
+**Stato attuale**: il client bundle.social di produzione **non e' implementato**
+di proposito (`app/integrations/bundle_social/prod_client.py`): il contratto
+dell'API va prima verificato su un account reale, e inventarlo produrrebbe codice
+che sembra finito e fallisce alla prima campagna vera (AGENTS.md regole 14 e 15).
+Il mock e' completo e funzionante. Finche' `BUNDLE_SOCIAL_INTEGRATION_MODE` resta
+`mock`, tutto il resto del sistema funziona normalmente.
+
+---
+
+## 4-ter. Portale utenti finali
+
+Gli utenti finali possono registrarsi e accedere alla **loro** dashboard su
+`/portal`, separata da quella amministrativa. Vedono i propri canali, le campagne
+di cui fanno parte (con i **loro** numeri, mai i totali di campagna) e le proprie
+statistiche.
+
+**Separazione delle sessioni.** Amministratori e utenti sono entrambi
+identificati da un UUID nel `sub` del JWT. I token portano ora un claim `typ`
+(`admin` / `portal_user`) verificato sia dal backend (`core/security.py`) sia dal
+middleware del frontend (`proxy.ts`, `lib/auth/session.ts`): senza, l'unica cosa
+che impedirebbe a un token utente di essere accettato su un endpoint admin
+sarebbe la coincidenza che la ricerca avviene su una tabella diversa. I token
+emessi prima di questa modifica non hanno il claim e restano validi come admin.
+I due cookie sono distinti, quindi le due sessioni convivono nello stesso
+browser.
+
+**Superficie separata invece di multi-tenancy retrofittata.** Gli endpoint
+esistenti assumono che il chiamante veda tutto (`get_current_admin`); adattarli
+avrebbe richiesto di verificare e ritestare ognuno, dove un filtro dimenticato e'
+una fuga di dati fra clienti. Il router `/api/v1/portal` e' piccolo e per
+costruzione legge solo le righe dell'utente autenticato, il cui id arriva sempre
+dal token e mai da un parametro manipolabile.
+
+**Chi si registra da solo nasce `status="inactive"`**: `active` e' cio' che rende
+un utente bersaglio delle campagne (vedi §5), quindi altrimenti chiunque
+raggiunga l'endpoint pubblico si inserirebbe da solo nella campagna successiva.
+Un amministratore lo attiva esplicitamente. L'utente puo' comunque accedere e
+collegare i canali nel frattempo, e la dashboard glielo spiega.
+
+Il pulsante "Collega un canale" richiede il client di produzione del fornitore:
+finche' non e' implementato risponde `501` con un messaggio esplicito, non un
+errore generico.
 
 ---
 

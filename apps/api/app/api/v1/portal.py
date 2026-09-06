@@ -434,3 +434,75 @@ def get_my_stats(
         total_views=int(totals[4] or 0),
         total_reach=int(totals[5] or 0),
     )
+
+
+# --------------------------------------------------------------------------
+# Channel connection
+# --------------------------------------------------------------------------
+
+class ConnectLinkRequest(BaseModel):
+    # Provider-side platform identifier ("instagram", "facebook", "tiktok"...).
+    platform: str = Field(min_length=2, max_length=40)
+
+
+class ConnectLinkResponse(BaseModel):
+    url: str
+
+
+# Platforms offered in the portal's connect panel. Sourced from bundle.social's
+# published provider list; the panel renders exactly these, so adding one here is
+# all it takes to expose it once the provider is live.
+CONNECTABLE_PLATFORMS = [
+    "instagram", "facebook", "tiktok", "youtube", "linkedin", "x",
+    "threads", "pinterest", "bluesky", "mastodon", "reddit", "telegram",
+]
+
+
+@router.get("/connect/platforms", response_model=List[str])
+def list_connectable_platforms(current_user: User = Depends(get_current_portal_user)):
+    return CONNECTABLE_PLATFORMS
+
+
+@router.post("/connect/link", response_model=ConnectLinkResponse)
+def create_connect_link(
+    payload: ConnectLinkRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_portal_user),
+):
+    """
+    Start the hosted OAuth flow: return a URL for the user to open and authorise
+    their own social account, which then lands under our provider account.
+
+    NOT YET IMPLEMENTED, on purpose. The flow needs three things from the
+    provider whose exact contract has not been verified against a live account:
+    creating a team for this user, requesting a connect link for it, and the
+    callback that tells us a channel appeared. Inventing those calls would
+    produce a button that looks finished and fails in front of a real customer
+    (AGENTS.md rules 14 and 15).
+
+    To finish: complete app/integrations/bundle_social/prod_client.py from
+    captured request/response pairs, then replace the body below with
+      1. find-or-create the user's BufferConnection for the provider,
+      2. create the provider team if provider_account_ref is unset,
+      3. return the connect URL for the requested platform.
+    """
+    if payload.platform not in CONNECTABLE_PLATFORMS:
+        raise HTTPException(status_code=400, detail="Piattaforma non supportata.")
+
+    if settings.BUNDLE_SOCIAL_INTEGRATION_MODE.lower() != "production" or not settings.BUNDLE_SOCIAL_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=(
+                "Il collegamento diretto dei canali non è ancora attivo su questo server. "
+                "Nel frattempo un amministratore può collegare i tuoi canali tramite Buffer."
+            ),
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=(
+            "Client del provider non ancora implementato: va completato "
+            "app/integrations/bundle_social/prod_client.py verificando il "
+            "contratto dell'API su un account reale."
+        ),
+    )
