@@ -1,6 +1,6 @@
 # Guida al deploy su server Linux
 
-Guida pratica per portare questo progetto (backend FastAPI + worker/scheduler Celery + frontend Next.js + Postgres + Redis + Nginx, tutto in Docker — stack tecnologico completo in [sezione 1](#1-cosa-serve-prima-di-iniziare)) su un server Linux, creare il database, e avviare tutto. Scritta per essere seguita passo passo da una persona, oppure eseguita direttamente da Claude Code se gli viene chiesto "fai il deploy seguendo docs/DEPLOYMENT.md". Per lo schema dati vedi [DATABASE.md](./DATABASE.md); per il comportamento reale del sistema una volta avviato vedi [FUNCTIONALITY.md](./FUNCTIONALITY.md); per il modulo Blog Writer AI (generazione articoli + pubblicazione WordPress) vedi [BLOG_WRITER.md](./BLOG_WRITER.md). Il sito pubblico statico (`agimarketing.app`) è un repository separato, opzionale rispetto a questa piattaforma — vedi [sezione 9](#9-dominio-e-https-consigliato-richiesto-per-pubblicare-fotovideo-su-buffer).
+Guida pratica per portare questo progetto (backend FastAPI + worker/scheduler Celery + frontend Next.js + Postgres + Redis + Nginx, tutto in Docker — stack tecnologico completo in [sezione 1](#1-cosa-serve-prima-di-iniziare)) su un server Linux, creare il database, e avviare tutto. Scritta per essere seguita passo passo da una persona, oppure eseguita direttamente da Claude Code se gli viene chiesto "fai il deploy seguendo docs/DEPLOYMENT.md". Per lo schema dati vedi [DATABASE.md](./DATABASE.md); per il comportamento reale del sistema una volta avviato vedi [FUNCTIONALITY.md](./FUNCTIONALITY.md); per il modulo Blog Writer AI (generazione articoli + pubblicazione WordPress) vedi [BLOG_WRITER.md](./BLOG_WRITER.md). Per l'hostname temporaneo su cui gira oggi la piattaforma, in attesa di un dominio, vedi [sezione 9](#9-dominio-e-https-consigliato-richiesto-per-pubblicare-fotovideo-su-buffer).
 
 Se sei Claude Code e stai leggendo questo file per eseguire un deploy: vai alla sezione **[13. Istruzioni per Claude Code](#13-istruzioni-per-claude-code)** in fondo prima di iniziare.
 
@@ -69,8 +69,6 @@ Nessuna di queste va installata a mano: sono già fissate nei Dockerfile/compose
 | Reverse proxy + HTTPS | Nginx 1.25 + Certbot (Let's Encrypt) | `infrastructure/nginx/nginx.conf`, `docker-compose.prod.yml` |
 | Elaborazione media | FFmpeg (durata video, thumbnail) | `apps/api/Dockerfile` |
 | Orchestrazione | Docker Compose — due file: `docker-compose.yml` (dev) e `docker-compose.prod.yml` (produzione, con Nginx/HTTPS) | radice del progetto |
-
-Sito pubblico (`agimarketing.app`, repo separato — vedi sezione 9): solo HTML/CSS/JS statico, nessuna tecnologia di build, servito direttamente da Nginx.
 
 ---
 
@@ -312,17 +310,17 @@ Punta questi sottodomini all'IP del server (record DNS di tipo A):
 - `api.tuodominio.com` → backend
 - `media.tuodominio.com` → file media
 
-Poi modifica `infrastructure/nginx/nginx.conf` sostituendo i tre hostname `*.162-55-187-18.sslip.io` con i tuoi domini reali, e ripeti la procedura sotto passando i tuoi domini invece del valore sslip.io.
+Poi modifica `infrastructure/nginx/nginx.conf` sostituendo i tre hostname `*.46-225-185-149.sslip.io` con i tuoi domini reali, e ripeti la procedura sotto passando i tuoi domini invece del valore sslip.io.
 
 ### Se non hai un dominio: sslip.io (nessun costo, nessuna registrazione)
 
-[sslip.io](https://sslip.io) è un servizio DNS pubblico reale (non un dominio "interno" o finto) che fa risolvere hostname come `162-55-187-18.sslip.io` direttamente all'IP incorporato nel nome — senza possedere né configurare nulla. Essendo un dominio pubblico realmente risolvibile, **Let's Encrypt può emettere certificati HTTPS validi** per questi hostname tramite la normale challenge HTTP-01 (non serve un certificato wildcard).
+[sslip.io](https://sslip.io) è un servizio DNS pubblico reale (non un dominio "interno" o finto) che fa risolvere hostname come `46-225-185-149.sslip.io` direttamente all'IP incorporato nel nome — senza possedere né configurare nulla. Essendo un dominio pubblico realmente risolvibile, **Let's Encrypt può emettere certificati HTTPS validi** per questi hostname tramite la normale challenge HTTP-01 (non serve un certificato wildcard).
 
-`infrastructure/nginx/nginx.conf` in questo repo è già configurato per l'IP di questo server (`162.55.187.18` → `app.162-55-187-18.sslip.io`, `api.162-55-187-18.sslip.io`, `media.162-55-187-18.sslip.io`). Per ottenere i certificati reali:
+`infrastructure/nginx/nginx.conf` in questo repo è già configurato per l'IP di questo server (`46.225.185.149` → `app.46-225-185-149.sslip.io`, `api.46-225-185-149.sslip.io`, `media.46-225-185-149.sslip.io`). Per ottenere i certificati reali:
 
 ```bash
 docker compose down   # ferma lo stack dev, libera la porta 80
-./scripts/setup-https.sh 162-55-187-18.sslip.io tuaemail@esempio.com
+./scripts/setup-https.sh 46-225-185-149.sslip.io tuaemail@esempio.com
 ```
 
 Lo script (vedi commenti in testa al file per i dettagli):
@@ -337,39 +335,43 @@ Rinnovo automatico: i certificati Let's Encrypt durano 90 giorni. Una volta otte
 ```bash
 crontab -e
 # Rinnovo certificato ogni notte alle 4:00 (no-op se non vicino a scadenza)
-0 4 * * * cd ~/social-publisher && docker compose -f docker-compose.prod.yml run --rm certbot renew --quiet && docker compose -f docker-compose.prod.yml exec nginx nginx -s reload >> backups/certbot-renew.log 2>&1
+0 4 * * * cd /opt/agi-agent && docker compose -f docker-compose.prod.yml run --rm certbot renew --quiet && docker compose -f docker-compose.prod.yml exec nginx nginx -s reload >> /opt/agi-agent/backups/certbot-renew.log 2>&1
 ```
 
-### Sito pubblico (agimarketing.app) — repo separato
+### Hostname temporaneo del provider (in attesa di un dominio)
 
-Il sito statico servito al dominio nudo (`agimarketing.app` / `www.agimarketing.app`, homepage con "Accedi" che rimanda ad `app.agimarketing.app`) vive in un **secondo repository**, separato da questo: [`raphaelcodeart/agimarketing-site`](https://github.com/raphaelcodeart/agimarketing-site) (privato). È solo HTML/CSS/JS statico, nessuna build.
+Finché non viene acquistato un dominio, oltre ai tre hostname sslip.io la dashboard risponde anche
+sull'hostname reverse-DNS fornito da Hetzner per questo server:
+`https://static.149.185.225.46.clients.your-server.de` (attenzione: Hetzner costruisce quel nome con
+gli ottetti **invertiti** rispetto all'IP reale, che è `46.225.185.149` — non è un errore).
 
-Per rimetterlo in piedi su un server nuovo:
-
-```bash
-git clone https://github.com/raphaelcodeart/agimarketing-site.git /opt/agimarketing-public/agi-marketing
-```
-
-`docker-compose.prod.yml` (in questo repo, servizio `nginx`) monta quel path assoluto in sola lettura:
-
-```yaml
-- /opt/agimarketing-public/agi-marketing:/usr/share/nginx/public:ro
-```
-
-Se sul nuovo server lo clonate in un percorso diverso, aggiornate questa riga di conseguenza prima di avviare lo stack.
-
-`infrastructure/nginx/nginx.conf` è già configurato con i vhost per `agimarketing.app`/`www.agimarketing.app` (dominio nudo → sito statico) accanto a quelli di `app./api./media.agimarketing.app` (piattaforma) — vedi i commenti nel file. `setup-https.sh` (sopra) copre solo i tre sottodomini `app/api/media`: il certificato per il dominio nudo va richiesto **a parte**, dopo aver completato la procedura sslip.io/dominio sopra e con lo stack già up (la config finale nel repo risponde già alla ACME challenge su porta 80 per tutti i domini elencati in `server_name`):
+Ha un proprio certificato Let's Encrypt, richiesto a parte perché `setup-https.sh` copre solo i tre
+sottodomini sslip.io:
 
 ```bash
 docker compose -f docker-compose.prod.yml run --rm certbot certonly \
   --webroot -w /var/www/certbot \
-  -d agimarketing.app -d www.agimarketing.app \
+  -d static.149.185.225.46.clients.your-server.de \
   --email tuaemail@esempio.com --agree-tos --non-interactive --keep-until-expiring
 
 docker compose -f docker-compose.prod.yml exec nginx nginx -s reload
 ```
 
-Aggiungete `agimarketing.app` e `www.agimarketing.app` allo stesso cron di rinnovo del certificato descritto sopra (basta un secondo `certbot renew`, oppure un unico comando: certbot rinnova tutti i certificati emessi su questo host in un colpo solo).
+In `infrastructure/nginx/nginx.conf` è un semplice alias del vhost `app.*`: essendo un hostname singolo
+non può avere i sottodomini `api.`/`media.`, quindi da qui la dashboard raggiunge il backend solo
+attraverso il proprio proxy BFF same-origin. Per gli upload media pubblicati su Buffer resta valido
+`PUBLIC_MEDIA_BASE_URL=https://media.46-225-185-149.sslip.io`.
+
+Quando arriverà un dominio vero, sostituite i tre hostname sslip.io in `nginx.conf` (vedi sopra),
+aggiornate `NEXT_PUBLIC_API_URL` e `PUBLIC_MEDIA_BASE_URL` nel `.env` e la lista CORS in
+`apps/api/app/main.py`, poi rifate la procedura dei certificati.
+
+> **Nota storica**: il repository originale da cui è nato questo progetto serviva anche un sito
+> statico di marketing (`agimarketing.app`) da un secondo repository, montato in `nginx` come
+> volume e con i propri vhost. In questo progetto quei vhost e quel mount **non ci sono**: la
+> piattaforma serve solo `app./api./media.` più l'hostname temporaneo qui sopra.
+
+Il cron di rinnovo descritto sopra copre **entrambi** i certificati (sslip.io e hostname temporaneo): `certbot renew` rinnova in un colpo solo tutti i certificati emessi su questo host, non serve una riga per ciascuno.
 
 ---
 
@@ -458,7 +460,7 @@ docker compose up -d
 Trasparenza su alcune cose che **non funzioneranno ancora perfettamente** su un server reale, così non perdi tempo a capire perché:
 
 1. ~~Il collegamento OAuth con Buffer reindirizza sempre a `localhost:3000`~~ — **risolto**: il collegamento non usa più OAuth. Verificato su developers.buffer.com (luglio 2026) che Buffer non accetta più registrazioni OAuth di nuove app di terze parti (né sulla vecchia REST API, né — non ancora — sulla nuova API GraphQL). Ogni utente genera una **chiave API personale** dal proprio account Buffer (Settings → API) e la incolla nella dashboard (pulsante "Collega account" in Connessioni Buffer); il backend la valida e la salva cifrata. Nessun redirect, nessun problema di dominio/localhost.
-2. **CORS nel backend** (`apps/api/app/main.py`) accetta richieste da `http://localhost:3000`, `http://app.example.com` e dal dominio sslip.io configurato per questo server (`https://app.162-55-187-18.sslip.io`). Se usi un dominio diverso, aggiorna quella lista. Nota: il collegamento Buffer e la maggior parte delle chiamate della dashboard passano dal proxy interno same-origin, quindi non sono influenzate da questo; riguarda solo eventuali chiamate dirette al backend dal browser.
+2. **CORS nel backend** (`apps/api/app/main.py`) accetta richieste da `http://localhost:3000`, `http://app.example.com` e dal dominio sslip.io configurato per questo server (`https://app.46-225-185-149.sslip.io`). Se usi un dominio diverso, aggiorna quella lista. Nota: il collegamento Buffer e la maggior parte delle chiamate della dashboard passano dal proxy interno same-origin, quindi non sono influenzate da questo; riguarda solo eventuali chiamate dirette al backend dal browser.
 3. **`BUFFER_INTEGRATION_MODE=mock`** nel `.env`: finché resta così, la piattaforma non parla col vero Buffer, usa dati finti generati dal backend stesso (utile per collaudare tutto senza account Buffer reali). Quando un utente fornisce la propria chiave API Buffer reale, va cambiato `BUFFER_INTEGRATION_MODE=production` — non serve più nessuna credenziale a livello di piattaforma (niente `BUFFER_CLIENT_ID`/`BUFFER_CLIENT_SECRET`, rimossi).
 4. ~~Pubblicazione di foto/video su Buffer richiede hosting media in HTTPS pubblico~~ — **risolvibile**: segui la sezione 9 (`./scripts/setup-https.sh`) per attivare HTTPS reale con un dominio sslip.io. `PUBLIC_MEDIA_BASE_URL` nel `.env` deve puntare all'origine `https://media.<tuo-dominio>` risultante; il guardrail in `apps/api/app/tasks/publication.py` continuerà a rifiutare esplicitamente (Publication "failed", categoria "configuration_error") solo se questa variabile non è ancora configurata in HTTPS. Le campagne di solo testo funzionano comunque anche senza.
 5. **Media caricati**: i file finiscono in un volume Docker (`media_storage`), servito da Nginx. Se cambi server, i file media non si spostano da soli — vanno copiati a parte (non sono nel dump del database).

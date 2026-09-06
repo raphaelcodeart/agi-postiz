@@ -111,9 +111,6 @@ services:
       - media_storage_prod:/storage:ro
       - certbot_www:/var/www/certbot:ro
       - certbot_conf:/etc/letsencrypt:ro
-      # Static public marketing site served at the bare domain (agimarketing.app),
-      # kept fully separate from the private app/api/media vhosts below.
-      - /opt/agimarketing-public/agi-marketing:/usr/share/nginx/public:ro
 
   # Not a long-running service: invoked on demand via
   # `docker compose -f docker-compose.prod.yml run --rm certbot ...`

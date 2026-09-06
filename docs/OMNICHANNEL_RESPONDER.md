@@ -376,7 +376,7 @@ Per collegare un bot Telegram:
 
 1. Crea un bot con [@BotFather](https://t.me/BotFather) su Telegram, copia il token (`123456:ABC-DEF...`).
 2. Dashboard → Omnichannel Responder → Canali → "Nuovo canale" → tipo `Telegram`, incolla il token.
-3. Sulla riga del canale appena creato, icona 🔗 "Registra webhook" → incolla l'URL pubblico HTTPS di **questa API** (es. `https://api.162-55-187-18.sslip.io`, lo stesso vhost `api.*` di [DEPLOYMENT.md §9](./DEPLOYMENT.md#9-dominio-e-https-consigliato-richiesto-per-pubblicare-fotovideo-su-buffer)). Il backend chiama `setWebhook` verso Telegram con l'URL `<public_base_url>/api/v1/omnichannel-responder/webhooks/telegram/<channel_account_id>`.
+3. Sulla riga del canale appena creato, icona 🔗 "Registra webhook" → incolla l'URL pubblico HTTPS di **questa API** (es. `https://api.46-225-185-149.sslip.io`, lo stesso vhost `api.*` di [DEPLOYMENT.md §9](./DEPLOYMENT.md#9-dominio-e-https-consigliato-richiesto-per-pubblicare-fotovideo-su-buffer)). Il backend chiama `setWebhook` verso Telegram con l'URL `<public_base_url>/api/v1/omnichannel-responder/webhooks/telegram/<channel_account_id>`.
 4. Scrivi al bot da Telegram: il messaggio deve comparire nell'Inbox entro pochi secondi, seguito dalla bozza AI (se una chiave OpenAI è configurata).
 
 Per testare senza un bot reale: crea un canale di tipo `Test (mock)`, poi usa l'icona ▶ "Simula messaggio" sulla sua riga.

@@ -15,7 +15,7 @@
 # Usage (from the repository root, on the server):
 #   ./scripts/setup-https.sh <ip-with-dashes>.sslip.io you@email.com
 # Example:
-#   ./scripts/setup-https.sh 162-55-187-18.sslip.io novarese.michele@gmail.com
+#   ./scripts/setup-https.sh 46-225-185-149.sslip.io novarese.michele@gmail.com
 #
 # Requires infrastructure/nginx/nginx.conf to already reference the same
 # hostnames passed here (app./api./media. + this domain) - regenerate it if

@@ -10,7 +10,7 @@ const nextConfig: NextConfig = {
   // Dev server rejects cross-origin requests to its HMR/asset endpoints by default,
   // which breaks client-side hydration (and thus form submit handlers) when the
   // dashboard is reached via the server's IP/domain instead of localhost.
-  allowedDevOrigins: ["162.55.187.18"],
+  allowedDevOrigins: ["46.225.185.149"],
 };
 
 export default nextConfig;

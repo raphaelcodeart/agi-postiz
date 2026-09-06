@@ -20,7 +20,8 @@ app = FastAPI(
 origins = [
     "http://localhost:3000",
     "http://app.example.com",
-    "https://app.162-55-187-18.sslip.io",
+    "https://app.46-225-185-149.sslip.io",
+    "https://static.149.185.225.46.clients.your-server.de",
 ]
 
 app.add_middleware(
