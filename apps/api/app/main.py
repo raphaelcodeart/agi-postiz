@@ -7,6 +7,7 @@ from app.api.v1 import omnichannel, omnichannel_webhooks
 from app.api.v1 import statistics
 from app.api.v1 import public_stats
 from app.api.v1 import portal
+from app.api.v1 import bundle_social_webhooks
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -51,6 +52,13 @@ app.include_router(public_stats.router, prefix=f"{settings.API_V1_STR}/public/st
 # Portale utenti finali: superficie separata da quella admin, ogni query e'
 # filtrata sull'utente autenticato (vedi app/api/v1/portal.py).
 app.include_router(portal.router, prefix=f"{settings.API_V1_STR}/portal", tags=["portal"])
+# Webhook in ingresso dal provider: endpoint pubblico, autenticato dalla firma
+# HMAC (vedi app/api/v1/bundle_social_webhooks.py).
+app.include_router(
+    bundle_social_webhooks.router,
+    prefix=f"{settings.API_V1_STR}/webhooks",
+    tags=["webhooks"],
+)
 
 @app.get("/")
 def read_root():

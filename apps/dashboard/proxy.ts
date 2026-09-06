@@ -13,7 +13,12 @@ import { PORTAL_SESSION_COOKIE_NAME, SESSION_COOKIE_NAME } from "@/lib/env";
  */
 const ADMIN_PUBLIC_PATHS = ["/login"];
 const PORTAL_ROOT = "/portal";
-const PORTAL_PUBLIC_PATHS = ["/portal/login", "/portal/register"];
+// connect-done is the provider's redirect target at the end of the hosted OAuth
+// flow. It must be public: the popup is a fresh browsing context that may not
+// carry the session cookie back, and bouncing the user to a login screen at the
+// very end of a successful authorisation would throw away the connection.
+// It renders nothing sensitive - it posts a message to its opener and closes.
+const PORTAL_PUBLIC_PATHS = ["/portal/login", "/portal/register", "/portal/connect-done"];
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;

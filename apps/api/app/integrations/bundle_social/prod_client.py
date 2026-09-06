@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from app.core.config import settings
 from app.integrations.buffer.client import BaseBufferClient
 from app.integrations.buffer.exceptions import (
     BufferApiError,
@@ -165,12 +166,24 @@ class ProductionBundleSocialClient(BaseBufferClient):
         if not types:
             raise BufferApiError("Nessuna piattaforma valida richiesta.", category="validation_failed")
 
+        # White-label options, all verified accepted by the API (they come back
+        # inside the signed token): our logo, our wording, no provider branding.
+        # The OAuth page itself still belongs to the social network - Meta and
+        # the others do not allow that step to be rebranded or framed - but
+        # everything around it can look like ours.
         body: Dict[str, Any] = {
             "teamId": team_id,
             "socialAccountTypes": types,
             "redirectUrl": redirect_url,
             "language": "it",
+            "hidePoweredBy": True,
+            "goBackButtonText": "Torna su Agi Post",
+            # No success modal: the popup closes on its own and our own page
+            # shows the result, so an intermediate dialog is one click of noise.
+            "showModalOnConnectSuccess": False,
         }
+        if settings.PORTAL_BRAND_LOGO_URL:
+            body["logoUrl"] = settings.PORTAL_BRAND_LOGO_URL
         if user_name:
             body["userName"] = user_name
 

@@ -61,15 +61,28 @@ export function ConnectChannelPanel() {
     [router]
   );
 
-  // The hosted flow finishes on the provider's site, so returning here is the
-  // only signal that a channel may now exist. Without this the user comes back
-  // to a page that looks exactly as they left it.
+  // Same-tab fallback: the popup was blocked, so the flow navigated away and
+  // came back with the marker.
   useEffect(() => {
     if (searchParams.get("connected") === "1") {
       void sync(true);
       router.replace("/portal/channels");
     }
   }, [searchParams, sync, router]);
+
+  // Popup path: the callback page posts a message before closing itself. The
+  // origin check matters - without it any site could open a window onto this
+  // page and drive a sync.
+  useEffect(() => {
+    function onMessage(event: MessageEvent) {
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.source !== "agipost" || event.data?.type !== "channel-connected") return;
+      setMessage(null);
+      void sync(true);
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [sync]);
 
   async function connect(platform: string) {
     setMessage(null);
@@ -83,9 +96,26 @@ export function ConnectChannelPanel() {
       const payload = await response.json().catch(() => null);
 
       if (response.ok && payload?.url) {
-        // The provider hosts the OAuth UI; leaving the app is the flow, not a
-        // failure of it.
-        window.location.href = payload.url;
+        // Opened in a popup rather than by navigating away: the user keeps our
+        // page behind the window and comes back to it, instead of leaving the
+        // site and returning through a redirect. A full iframe is not an option
+        // - the social networks send X-Frame-Options on their login pages
+        // precisely to stop anyone embedding them - so a popup is as integrated
+        // as this step can be. It is the same shape as "Sign in with Google".
+        const popup = window.open(
+          payload.url,
+          "agipost-connect",
+          "width=620,height=760,menubar=no,toolbar=no,location=no,status=no"
+        );
+
+        if (!popup) {
+          // Popup blocked: fall back to navigating, which still works - the
+          // callback page redirects back with ?connected=1.
+          window.location.href = payload.url;
+          return;
+        }
+
+        setMessage("Completa l'autorizzazione nella finestra che si è aperta.");
         return;
       }
 

@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     # OAuth flow. Must be the address the END USER sees in their browser, not an
     # internal one, or the provider bounces them somewhere unreachable.
     PORTAL_PUBLIC_BASE_URL: str = "http://localhost:3000"
+    # Logo shown on the provider's hosted connect page, so the step looks like
+    # ours. Must be a public absolute URL the provider can load.
+    PORTAL_BRAND_LOGO_URL: str = ""
+    # Shared secret from the provider's webhook dashboard, used to verify the
+    # HMAC-SHA256 signature on incoming deliveries. Empty = webhook disabled.
+    BUNDLE_SOCIAL_WEBHOOK_SECRET: str = ""
 
     # OpenAI - optional, powers the campaign wizard's AI text-generation helper
     # (app/integrations/openai/client.py). Feature is hidden in the dashboard

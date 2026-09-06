@@ -532,7 +532,10 @@ def create_connect_link(
             api_key=api_key,
             team_id=connection.provider_account_ref,
             platforms=[payload.platform],
-            redirect_url=f"{settings.PORTAL_PUBLIC_BASE_URL}/portal/channels?connected=1",
+            # Lands on a page whose only job is to notify the opener and close
+            # itself, so the flow ends inside our site instead of on a page the
+            # user has to navigate away from.
+            redirect_url=f"{settings.PORTAL_PUBLIC_BASE_URL}/portal/connect-done",
             user_name=current_user.name,
         )
     except BufferApiError as e:
