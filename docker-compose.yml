@@ -1,0 +1,131 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: social_publisher_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_secure_pass_123}
+      POSTGRES_DB: ${POSTGRES_DB:-social_publisher}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-social_publisher}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: social_publisher_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: social_publisher_api
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./apps/api:/app
+      - media_storage:/storage
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: social_publisher_worker
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - ./apps/api:/app
+      - media_storage:/storage
+    command: celery -A app.workers.celery_app.celery worker --loglevel=info -c 1
+
+  beat:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: social_publisher_beat
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - ./apps/api:/app
+      - media_storage:/storage
+    command: celery -A app.workers.celery_app.celery beat --loglevel=info
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: apps/dashboard/Dockerfile
+      target: dev
+    container_name: social_publisher_dashboard
+    restart: always
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./apps/dashboard:/repo/apps/dashboard
+      - /repo/apps/dashboard/node_modules
+      - /repo/node_modules
+    env_file:
+      - .env
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      # Server-side origin used by the dashboard's BFF routes/middleware to reach
+      # the api container directly over the Docker network.
+      - API_INTERNAL_URL=http://api:8000
+
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: social_publisher_nginx
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+      - dashboard
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - media_storage:/storage:ro
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_storage:

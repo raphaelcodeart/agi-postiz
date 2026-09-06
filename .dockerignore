@@ -1,0 +1,19 @@
+# Build context is the monorepo root; keep it lean for the dashboard image build.
+.git
+.env
+.env.*
+!.env.example
+
+node_modules
+**/node_modules
+.next
+**/.next
+**/dist
+**/*.log
+
+# Backend is built from its own context (apps/api/Dockerfile) and isn't needed here.
+apps/api/.venv
+apps/api/__pycache__
+apps/api/**/__pycache__
+
+.claude

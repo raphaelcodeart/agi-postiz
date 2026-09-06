@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm -v)",
+      "Bash(echo \"npm: $\\(npm -v 2>/dev/null\\)\")",
+      "Bash(pnpm -v)",
+      "Bash(echo \"pnpm: $\\(pnpm -v 2>/dev/null || echo 'not found'\\)\")",
+      "Bash(yarn -v)",
+      "PowerShell(pnpm view next version 2>&1)",
+      "Bash(pnpm dlx *)",
+      "Bash(pnpm install *)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(curl -s https://ui.shadcn.com/r/styles/base-nova/theme.json)",
+      "Bash(pnpm lint *)",
+      "Bash(docker --version)",
+      "Bash(docker compose *)",
+      "Bash(pkill -f \"next start\")",
+      "Bash(pkill -f \"3100\")",
+      "Bash(SECRET_KEY=\"supersecretjwtkeyforadminauthsocialpublisher123!\" API_INTERNAL_URL=\"http://localhost:8000\" NEXT_PUBLIC_API_URL=\"http://localhost:8000\" PORT=3101 HOSTNAME=0.0.0.0 node .next/standalone/apps/dashboard/server.js)",
+      "Bash(disown)",
+      "Read(//tmp/**)"
+    ]
+  }
+}
