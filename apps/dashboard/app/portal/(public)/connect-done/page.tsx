@@ -1,34 +1,56 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { CheckCircle2Icon } from "lucide-react";
 
 /**
- * Landing page for the provider's redirect at the end of the hosted OAuth flow.
+ * Where the provider sends the user at the end of the hosted OAuth flow.
  *
- * It exists only to close the loop: the flow runs in a popup, so this page tells
- * the opener that something changed and closes itself. The user never really
- * reads it - if the popup was blocked and the flow ran in the same tab instead,
- * the fallback redirect below still gets them back to their channels.
+ * The popup version of this page must END here - it notifies the opener and
+ * closes. It must NOT navigate onward to the dashboard: doing so loads the whole
+ * portal a second time inside a 620px popup, which is what the "back" button in
+ * the provider's UI produced before.
  *
- * Deliberately in the (public) group: the popup is a fresh browsing context and
- * may not carry the session cookie on the way back, and bouncing the user to a
- * login screen at the very end of a successful authorisation would be absurd.
+ * window.close() is not guaranteed - browsers refuse it for windows the script
+ * did not open, and the chain of cross-origin redirects can break that
+ * relationship - so a short confirmation is rendered as the fallback rather than
+ * a redirect. Only a page with no opener at all (popup blocked, flow ran in the
+ * main tab) goes back to the channels list.
  */
 export default function ConnectDonePage() {
+  const [standalone, setStandalone] = useState(false);
+
   useEffect(() => {
-    const opener = window.opener;
-    if (opener && !opener.closed) {
-      opener.postMessage({ source: "agipost", type: "channel-connected" }, window.location.origin);
-      window.close();
+    const hasOpener = Boolean(window.opener) && !window.opener.closed;
+
+    if (!hasOpener) {
+      // Ran in the main tab: continue the journey where the user expects it.
+      window.location.replace("/portal/channels?connected=1");
       return;
     }
-    // No opener: the popup was blocked and this ran in the main tab.
-    window.location.replace("/portal/channels?connected=1");
+
+    window.opener.postMessage(
+      { source: "agipost", type: "channel-connected" },
+      window.location.origin
+    );
+
+    window.close();
+    // If the browser refused to close it, say so instead of leaving a blank page.
+    const timer = setTimeout(() => setStandalone(true), 400);
+    return () => clearTimeout(timer);
   }, []);
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-6">
-      <p className="text-sm text-muted-foreground">Collegamento completato, puoi chiudere questa finestra.</p>
+      <div className="flex max-w-xs flex-col items-center gap-3 text-center">
+        <CheckCircle2Icon className="size-10 text-emerald-500" />
+        <p className="font-medium">Canale collegato</p>
+        <p className="text-sm text-muted-foreground">
+          {standalone
+            ? "Puoi chiudere questa finestra: il canale è già comparso nella tua pagina."
+            : "Un attimo…"}
+        </p>
+      </div>
     </div>
   );
 }

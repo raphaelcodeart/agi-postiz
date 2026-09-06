@@ -82,6 +82,17 @@ class SocialChannel(Base):
     # dashboard shows it as an origin badge, both hot paths where a two-level
     # join through buffer_organizations would buy nothing.
     provider: Mapped[str] = mapped_column(String(30), default="buffer", server_default="buffer", nullable=False)
+    # Set when this channel is the SAME social account as one already connected
+    # through a different provider - e.g. an admin pastes a user's Buffer key for
+    # a page the user had already connected directly. Publishing to both would
+    # post the same content twice on the client's real profile, so a flagged
+    # channel is forced inactive and cannot be enabled until an administrator
+    # explicitly clears the flag (matching is a heuristic, see
+    # tasks/sync.py::find_duplicate_channel, so a false positive must be
+    # correctable rather than permanent).
+    duplicate_of_channel_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("social_channels.id", ondelete="SET NULL"), nullable=True
+    )
     platform: Mapped[str] = mapped_column(String(50), nullable=False) # instagram, facebook, linkedin, tiktok, youtube, x, etc.
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -100,6 +111,7 @@ class SocialChannel(Base):
         # Campaign targeting filters channels by provider on every launch,
         # alongside is_active/publication_mode.
         Index("idx_social_channels_provider", "provider"),
+        Index("idx_social_channels_duplicate_of", "duplicate_of_channel_id"),
     )
 
     # Relationships

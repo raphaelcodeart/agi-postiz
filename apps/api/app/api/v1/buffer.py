@@ -157,6 +157,24 @@ def update_channel_mode(
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
 
+    # A channel flagged as a duplicate of one already connected elsewhere cannot
+    # be re-enabled: doing so would publish every campaign twice on the client's
+    # real profile. Only "disabled" stays allowed, so the state can be confirmed
+    # but never relaxed by accident.
+    if channel.duplicate_of_channel_id is not None and mode != "disabled":
+        original = db.query(SocialChannel).filter(
+            SocialChannel.id == channel.duplicate_of_channel_id
+        ).first()
+        origin = f" (già collegato come «{original.name}»)" if original else ""
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Canale duplicato{origin}: attivarlo pubblicherebbe due volte "
+                "sullo stesso profilo. Se non è davvero un duplicato, usa "
+                "'Sblocca duplicato' per rimuovere il vincolo."
+            ),
+        )
+
     channel.publication_mode = mode
     channel.updated_at = datetime.now(timezone.utc)
     db.commit()
@@ -183,3 +201,34 @@ def disconnect_connection(
     db.delete(conn)
     db.commit()
     return
+
+
+@router.post("/channels/{channel_id}/clear-duplicate", response_model=SocialChannelResponse)
+def clear_duplicate_flag(
+    channel_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    admin: Administrator = Depends(get_current_admin)
+):
+    """
+    Clear the duplicate flag, making the channel usable again.
+
+    Duplicate detection compares handles, names and profile URLs across
+    providers that describe accounts differently, so it can be wrong. Without
+    this an administrator facing a false positive would have a channel they can
+    never publish to and no way out. Leaves the channel disabled: clearing the
+    flag says "this is not a duplicate", not "start publishing to it".
+    """
+    channel = db.query(SocialChannel).filter(SocialChannel.id == channel_id).first()
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+
+    channel.duplicate_of_channel_id = None
+    channel.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(channel)
+
+    owner_user_id = db.query(BufferConnection.user_id).join(
+        BufferOrganization, BufferOrganization.buffer_connection_id == BufferConnection.id
+    ).filter(BufferOrganization.id == channel.buffer_organization_id).scalar()
+    channel.user_id = owner_user_id
+    return channel

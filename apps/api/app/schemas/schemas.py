@@ -147,6 +147,10 @@ class SocialChannelResponse(BaseModel):
     # account; "bundle_social" = they connected it directly on our platform.
     provider: str = "buffer"
     provider_label: Optional[str] = None
+    # Valorizzato quando questo canale e' lo stesso account social di uno gia'
+    # collegato tramite un altro provider: bloccato per non pubblicare due volte.
+    duplicate_of_channel_id: Optional[uuid.UUID] = None
+    duplicate_note: Optional[str] = None
     platform: str
     name: str
     username: Optional[str]

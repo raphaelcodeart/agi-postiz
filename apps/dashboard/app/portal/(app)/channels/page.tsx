@@ -43,7 +43,7 @@ export default async function PortalChannelsPage() {
         ) : (
           <div className="flex flex-col gap-2">
             {list.map((channel) => (
-              <Card key={channel.id}>
+              <Card key={channel.id} className={channel.blocked_reason ? "border-amber-500/40" : undefined}>
                 <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-2 p-4">
                   <PlatformIcon platform={channel.platform} className="size-5 shrink-0" />
 
@@ -62,6 +62,14 @@ export default async function PortalChannelsPage() {
                   <Badge variant={channel.is_active ? "default" : "secondary"}>
                     {channel.is_active ? "Attivo" : "Non attivo"}
                   </Badge>
+
+                  {/* An inactive channel with no explanation reads as a fault.
+                      Saying why - and that it is deliberate - does not. */}
+                  {channel.blocked_reason && (
+                    <p className="w-full text-sm text-amber-700 dark:text-amber-400">
+                      {channel.blocked_reason}
+                    </p>
+                  )}
 
                   {channel.external_link && (
                     <a

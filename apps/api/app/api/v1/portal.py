@@ -16,7 +16,7 @@ Two rules hold everywhere in this file:
 2. Nothing here exposes a credential, not even indirectly - no API keys, no
    encrypted blobs, no provider tokens (AGENTS.md rules 8-10).
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -90,6 +90,10 @@ class PortalChannelResponse(BaseModel):
     provider: str
     provider_label: str
     last_sync_at: Optional[datetime]
+    # Explains why an inactive channel is inactive. Without it the user sees a
+    # channel they connected sitting there switched off with no reason given,
+    # and reasonably assumes something is broken.
+    blocked_reason: Optional[str] = None
 
 
 class PortalCampaignResponse(BaseModel):
@@ -294,6 +298,13 @@ def list_my_channels(
             provider=c.provider,
             provider_label=PROVIDER_LABELS.get(c.provider, c.provider),
             last_sync_at=c.last_sync_at,
+            blocked_reason=(
+                "Questo profilo risulta già collegato tramite un altro "
+                "servizio. È tenuto disattivo per non pubblicare due volte "
+                "sullo stesso account."
+                if c.duplicate_of_channel_id is not None
+                else None
+            ),
         )
         for c in channels
     ]
@@ -601,3 +612,87 @@ def sync_my_channels(
         channels=count,
         message="Canali aggiornati." if count else "Nessun canale trovato: completa l'autorizzazione sul social.",
     )
+
+
+class PortalTimelinePoint(BaseModel):
+    date: str
+    published: int
+
+
+class PortalOverviewResponse(BaseModel):
+    """Everything the dashboard renders, in one round trip."""
+    stats: PortalStatsResponse
+    timeline: List[PortalTimelinePoint]
+    top_channels: List[Dict[str, Any]]
+
+
+@router.get("/overview", response_model=PortalOverviewResponse)
+def get_my_overview(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_portal_user),
+):
+    """
+    Dashboard payload: headline figures, a 30-day publishing timeline, and the
+    user's best performing channels.
+
+    One endpoint rather than three because the dashboard always needs all of it
+    at once; splitting would only add round trips to a page that is a single
+    view.
+    """
+    stats = get_my_stats(db=db, current_user=current_user)
+
+    since = datetime.now(timezone.utc) - timedelta(days=30)
+
+    # Daily counts, aggregated in SQL: a promoter with thousands of publications
+    # should not ship them all to Python to be counted.
+    rows = (
+        db.query(
+            func.date_trunc("day", Publication.published_at).label("day"),
+            func.count(Publication.id),
+        )
+        .filter(
+            Publication.user_id == current_user.id,
+            Publication.published_at.isnot(None),
+            Publication.published_at >= since,
+        )
+        .group_by("day")
+        .order_by("day")
+        .all()
+    )
+    by_day = {row[0].date().isoformat(): row[1] for row in rows if row[0]}
+
+    # Every day present, including the empty ones: a line with gaps in it reads
+    # as missing data rather than as days with no activity.
+    timeline = []
+    for offset in range(30, -1, -1):
+        day = (datetime.now(timezone.utc) - timedelta(days=offset)).date().isoformat()
+        timeline.append(PortalTimelinePoint(date=day, published=by_day.get(day, 0)))
+
+    channel_rows = (
+        db.query(
+            SocialChannel.name,
+            SocialChannel.platform,
+            func.coalesce(func.sum(StatPostMetric.impressions), 0).label("impressions"),
+            func.coalesce(func.sum(StatPostMetric.likes), 0).label("likes"),
+            func.count(StatPostMetric.id).label("posts"),
+        )
+        .join(StatPostMetric, StatPostMetric.social_channel_id == SocialChannel.id)
+        .filter(StatPostMetric.user_id == current_user.id)
+        .group_by(SocialChannel.id, SocialChannel.name, SocialChannel.platform)
+        .order_by(func.coalesce(func.sum(StatPostMetric.impressions), 0).desc())
+        .limit(5)
+        .all()
+    )
+
+    top_channels = [
+        {
+            "name": row[0],
+            "platform": row[1],
+            "impressions": int(row[2] or 0),
+            "likes": int(row[3] or 0),
+            "posts": int(row[4] or 0),
+        }
+        for row in channel_rows
+    ]
+
+    return PortalOverviewResponse(stats=stats, timeline=timeline, top_channels=top_channels)

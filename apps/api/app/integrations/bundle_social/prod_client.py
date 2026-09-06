@@ -177,7 +177,11 @@ class ProductionBundleSocialClient(BaseBufferClient):
             "redirectUrl": redirect_url,
             "language": "it",
             "hidePoweredBy": True,
-            "goBackButtonText": "Torna su Agi Post",
+            # No back button: it navigates to redirectUrl, which in the popup
+            # meant loading our whole portal inside a 620px window. The popup
+            # closes itself when the flow ends, so there is nothing to go back
+            # to - and a user who changes their mind just closes the window.
+            "hideGoBackButton": True,
             # No success modal: the popup closes on its own and our own page
             # shows the result, so an intermediate dialog is one click of noise.
             "showModalOnConnectSuccess": False,

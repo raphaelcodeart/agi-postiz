@@ -12,6 +12,77 @@ from app.models.buffer import BufferConnection, BufferOrganization, SocialChanne
 
 logger = get_task_logger(__name__)
 
+def _identity_keys(platform: str, chan_info: dict) -> set:
+    """
+    Candidate identifiers for "which real social account is this".
+
+    Providers describe the same account differently: Buffer reports the handle in
+    `username` and the public profile URL in `external_link`, while
+    bundle.social reports the platform's own numeric id in `username` and
+    exposes it again as `external_id`, with no profile URL at all. So there is no
+    single field to compare - the match is made on any overlapping signal.
+
+    Heuristic by nature, which is why a match blocks publishing but stays
+    reversible by an administrator rather than being permanent.
+    """
+    keys = set()
+    raw = chan_info.get("raw") or {}
+
+    for value in (
+        raw.get("external_id"),
+        chan_info.get("username"),
+        chan_info.get("name"),
+    ):
+        if value:
+            keys.add(f"{platform}:{str(value).strip().lower().lstrip('@')}")
+
+    link = chan_info.get("external_link")
+    if link:
+        # Last meaningful path segment: facebook.com/<page-id>, x.com/<handle>.
+        tail = link.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+        if tail:
+            keys.add(f"{platform}:{tail.strip().lower().lstrip('@')}")
+
+    return keys
+
+
+def find_duplicate_channel(db, user_id, provider: str, platform: str, chan_info: dict):
+    """
+    An already-connected channel of the SAME user, on a DIFFERENT provider, that
+    looks like the same social account.
+
+    Scoped to one user on purpose: two different clients can legitimately connect
+    the same brand page, and that is their business, not a duplicate for us.
+    """
+    incoming = _identity_keys(platform, chan_info)
+    if not incoming:
+        return None
+
+    existing_channels = (
+        db.query(SocialChannel)
+        .join(BufferOrganization, SocialChannel.buffer_organization_id == BufferOrganization.id)
+        .join(BufferConnection, BufferOrganization.buffer_connection_id == BufferConnection.id)
+        .filter(
+            BufferConnection.user_id == user_id,
+            BufferConnection.provider != provider,
+            SocialChannel.platform == platform,
+            SocialChannel.duplicate_of_channel_id.is_(None),
+        )
+        .all()
+    )
+
+    for existing in existing_channels:
+        existing_info = existing.raw_metadata or {
+            "username": existing.username,
+            "name": existing.name,
+            "external_link": existing.external_link,
+        }
+        if incoming & _identity_keys(platform, existing_info):
+            return existing
+
+    return None
+
+
 @celery.task(name="app.tasks.sync.sync_buffer_connection")
 def sync_buffer_connection(connection_id_str: str) -> None:
     """
@@ -90,6 +161,21 @@ def sync_buffer_connection(connection_id_str: str) -> None:
                         SocialChannel.external_channel_id == ext_chan_id
                     ).first()
                     
+                    # Same real account already connected through another
+                    # provider? Publishing to both would post twice on the
+                    # client's actual profile, so the newcomer arrives inactive
+                    # and disabled rather than silently doubling every campaign.
+                    duplicate_of = None
+                    if not existing_chan:
+                        duplicate_of = find_duplicate_channel(
+                            db, conn.user_id, conn.provider, chan_info["platform"], chan_info
+                        )
+                        if duplicate_of:
+                            logger.warning(
+                                "Canale %s (%s) duplica %s: importato disattivato",
+                                chan_info.get("name"), conn.provider, duplicate_of.id,
+                            )
+
                     chan_properties = {
                         "platform": chan_info["platform"],
                         "name": chan_info["name"],
@@ -101,11 +187,22 @@ def sync_buffer_connection(connection_id_str: str) -> None:
                         "raw_metadata": chan_info,
                         "last_sync_at": datetime.now(timezone.utc)
                     }
+
+                    if duplicate_of is not None:
+                        chan_properties["is_active"] = False
+                        chan_properties["publication_mode"] = "disabled"
+                        chan_properties["duplicate_of_channel_id"] = duplicate_of.id
                     
                     if existing_chan:
                         for k, v in chan_properties.items():
                             setattr(existing_chan, k, v)
                         existing_chan.provider = conn.provider
+                        # A later sync reports the channel as connected upstream
+                        # and would flip is_active back on, undoing the block on
+                        # every refresh. The flag wins until an admin clears it.
+                        if existing_chan.duplicate_of_channel_id is not None:
+                            existing_chan.is_active = False
+                            existing_chan.publication_mode = "disabled"
                         chan = existing_chan
                     else:
                         chan = SocialChannel(

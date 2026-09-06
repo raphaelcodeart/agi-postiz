@@ -38,6 +38,8 @@ export type PortalChannel = {
   provider: string;
   provider_label: string;
   last_sync_at: string | null;
+  /** Why an inactive channel is inactive - e.g. already connected elsewhere. */
+  blocked_reason: string | null;
 };
 
 export type PortalCampaign = {
@@ -49,6 +51,18 @@ export type PortalCampaign = {
   published: number;
   failed: number;
   pending: number;
+};
+
+export type PortalOverview = {
+  stats: PortalStats;
+  timeline: { date: string; published: number }[];
+  top_channels: {
+    name: string;
+    platform: string;
+    impressions: number;
+    likes: number;
+    posts: number;
+  }[];
 };
 
 export type PortalStats = {
