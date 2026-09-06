@@ -127,12 +127,54 @@ gli altri direttamente.
 Aggiungere un fornitore significa scrivere una classe che implementa i sei metodi
 di `BaseBufferClient` e un ramo in `_build_client`. Nient'altro.
 
-**Stato attuale**: il client bundle.social di produzione **non e' implementato**
-di proposito (`app/integrations/bundle_social/prod_client.py`): il contratto
-dell'API va prima verificato su un account reale, e inventarlo produrrebbe codice
-che sembra finito e fallisce alla prima campagna vera (AGENTS.md regole 14 e 15).
-Il mock e' completo e funzionante. Finche' `BUNDLE_SOCIAL_INTEGRATION_MODE` resta
-`mock`, tutto il resto del sistema funziona normalmente.
+### bundle.social: contratto verificato
+
+Il client di produzione (`app/integrations/bundle_social/prod_client.py`) e'
+implementato con ogni endpoint **verificato sull'API reale** il 2026-09-06, non
+preso dalla documentazione: dove le due cose divergevano ha vinto l'API (i path
+plurali documentati -- `/teams`, `/posts` -- sono 404; quelli veri sono al
+singolare).
+
+| Cosa | Chiamata |
+|---|---|
+| Validazione chiave | `GET /api/v1/organization` |
+| Creare lo spazio di un utente | `POST /api/v1/team {name}` |
+| Elencare i canali | `GET /api/v1/team/{teamId}` -> `socialAccounts[]` |
+| **Collegare un canale** | `POST /api/v1/social-account/create-portal-link` -> `{url}` |
+| Pubblicare | `POST /api/v1/post/` |
+| Metriche | `GET /api/v1/analytics/post?postId=` |
+
+Autenticazione: `x-api-key`, **una sola chiave per tutta l'organizzazione**. Il
+singolo utente e' identificato dal suo *team*, non da una chiave propria.
+
+Il pezzo che rende possibile tutto il modello e' `create-portal-link`: restituisce
+un URL che l'utente finale apre per autorizzare il proprio account social. Il
+consenso avviene contro le app gia' approvate di bundle.social, quindi **non
+serve una nostra App Review con Meta, TikTok e gli altri**.
+
+Due differenze rispetto a Buffer, da tenere presenti:
+
+1. **Si pubblica per piattaforma dentro un team**, non per id di canale. Con un
+   team per utente e un account per piattaforma e' equivalente, ma un team con
+   due account della stessa piattaforma riceverebbe il post su entrambi.
+2. **Non esiste "pubblica adesso"**: lo stato e' `DRAFT` o `SCHEDULED`, quindi una
+   pubblicazione immediata viene programmata all'istante corrente.
+
+### Parita' delle statistiche: quasi completa
+
+Mappatura verificata sullo schema reale:
+
+| Nostra colonna | bundle.social |
+|---|---|
+| `likes`, `comments`, `shares`, `views`, `impressions` | diretta |
+| `reach` | `impressionsUnique` (le impression uniche *sono* la copertura) |
+| `clicks`, `follows`, `engagement_rate` | **non forniti** |
+
+Le tre metriche mancanti restano `null` sui canali di questo provider invece di
+essere derivate da qualcos'altro: un `engagement_rate` calcolato da noi
+significherebbe una cosa diversa da quello di Buffer, e i due numeri finirebbero
+nella stessa colonna. `saves` non ha una colonna dedicata e resta in
+`metrics_raw`, quindi non va perso.
 
 ---
 

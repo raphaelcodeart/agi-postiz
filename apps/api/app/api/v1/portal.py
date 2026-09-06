@@ -28,7 +28,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.security import TOKEN_TYPE_PORTAL_USER, SecurityService
 from app.db.session import get_db
-from app.integrations.providers import PROVIDER_LABELS
+from app.integrations.buffer.exceptions import BufferApiError
+from app.integrations.providers import PROVIDER_BUNDLE_SOCIAL, PROVIDER_LABELS
 from app.models.buffer import BufferConnection, BufferOrganization, SocialChannel
 from app.models.campaign import Campaign, CampaignTarget
 from app.models.publication import Publication
@@ -470,21 +471,15 @@ def create_connect_link(
     current_user: User = Depends(get_current_portal_user),
 ):
     """
-    Start the hosted OAuth flow: return a URL for the user to open and authorise
-    their own social account, which then lands under our provider account.
+    Start the hosted OAuth flow.
 
-    NOT YET IMPLEMENTED, on purpose. The flow needs three things from the
-    provider whose exact contract has not been verified against a live account:
-    creating a team for this user, requesting a connect link for it, and the
-    callback that tells us a channel appeared. Inventing those calls would
-    produce a button that looks finished and fails in front of a real customer
-    (AGENTS.md rules 14 and 15).
+    Returns a URL the user opens to authorise their own social account on the
+    platform itself. The consent happens against the provider's approved apps,
+    which is what lets us onboard channels without our own Meta/TikTok app
+    review.
 
-    To finish: complete app/integrations/bundle_social/prod_client.py from
-    captured request/response pairs, then replace the body below with
-      1. find-or-create the user's BufferConnection for the provider,
-      2. create the provider team if provider_account_ref is unset,
-      3. return the connect URL for the requested platform.
+    Creates the user's provider connection and team on first use, so a user who
+    has never connected anything needs no setup step of their own.
     """
     if payload.platform not in CONNECTABLE_PLATFORMS:
         raise HTTPException(status_code=400, detail="Piattaforma non supportata.")
@@ -498,11 +493,52 @@ def create_connect_link(
             ),
         )
 
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail=(
-            "Client del provider non ancora implementato: va completato "
-            "app/integrations/bundle_social/prod_client.py verificando il "
-            "contratto dell'API su un account reale."
-        ),
-    )
+    from app.integrations.bundle_social.prod_client import ProductionBundleSocialClient
+
+    client = ProductionBundleSocialClient()
+    api_key = settings.BUNDLE_SOCIAL_API_KEY
+
+    connection = db.query(BufferConnection).filter(
+        BufferConnection.user_id == current_user.id,
+        BufferConnection.provider == PROVIDER_BUNDLE_SOCIAL,
+    ).first()
+
+    try:
+        if not connection:
+            # The team name carries the user id, not just their display name:
+            # names are neither unique nor stable, and this is what an operator
+            # reads in the provider's own dashboard when tracing a channel back
+            # to a customer.
+            team = client.create_team(api_key, name=f"{current_user.name} ({current_user.id})")
+            connection = BufferConnection(
+                user_id=current_user.id,
+                provider=PROVIDER_BUNDLE_SOCIAL,
+                authentication_type="platform_key",
+                provider_account_ref=team["id"],
+                external_account_id=team["id"],
+                status="connected",
+            )
+            db.add(connection)
+            db.commit()
+            db.refresh(connection)
+        elif not connection.provider_account_ref:
+            team = client.create_team(api_key, name=f"{current_user.name} ({current_user.id})")
+            connection.provider_account_ref = team["id"]
+            connection.external_account_id = team["id"]
+            connection.status = "connected"
+            db.commit()
+
+        url = client.create_portal_link(
+            api_key=api_key,
+            team_id=connection.provider_account_ref,
+            platforms=[payload.platform],
+            redirect_url=f"{settings.PORTAL_PUBLIC_BASE_URL}/portal/channels?connected=1",
+            user_name=current_user.name,
+        )
+    except BufferApiError as e:
+        # The provider's own message is more useful than a generic failure, but
+        # it must never carry the platform key - it does not: the key travels in
+        # a header, and only response bodies reach this message.
+        raise HTTPException(status_code=502, detail=f"Collegamento non riuscito: {e.message}")
+
+    return ConnectLinkResponse(url=url)

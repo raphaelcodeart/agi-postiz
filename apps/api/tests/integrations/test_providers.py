@@ -79,7 +79,12 @@ def test_bundle_connection_uses_platform_key_not_connection_token(monkeypatch):
     """
     The credential inversion that makes this provider different: the key comes
     from configuration, and the connection only supplies the team reference.
+
+    The integration mode is pinned rather than inherited from the environment:
+    otherwise this test asserts a different client depending on whether the
+    deployment it runs on has the provider switched on.
     """
+    monkeypatch.setattr("app.core.config.settings.BUNDLE_SOCIAL_INTEGRATION_MODE", "mock")
     monkeypatch.setattr("app.core.config.settings.BUNDLE_SOCIAL_API_KEY", "platform-key")
     conn = _connection(provider=PROVIDER_BUNDLE_SOCIAL, account_ref="team_42", token=None)
 
@@ -96,6 +101,7 @@ def test_bundle_without_platform_key_fails_as_configuration_error(monkeypatch):
     Fail here rather than upstream: the publication attempt then records a
     readable reason instead of an opaque 401 from the provider.
     """
+    monkeypatch.setattr("app.core.config.settings.BUNDLE_SOCIAL_INTEGRATION_MODE", "mock")
     monkeypatch.setattr("app.core.config.settings.BUNDLE_SOCIAL_API_KEY", "")
     conn = _connection(provider=PROVIDER_BUNDLE_SOCIAL, account_ref="team_42", token=None)
 

@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # concurrency is capped per provider rather than per connection
     # (see services/rate_limiter.py).
     BUNDLE_SOCIAL_CONCURRENCY_LIMIT: int = 4
+    # Public origin of the portal, used to build the return URL of the hosted
+    # OAuth flow. Must be the address the END USER sees in their browser, not an
+    # internal one, or the provider bounces them somewhere unreachable.
+    PORTAL_PUBLIC_BASE_URL: str = "http://localhost:3000"
 
     # OpenAI - optional, powers the campaign wizard's AI text-generation helper
     # (app/integrations/openai/client.py). Feature is hidden in the dashboard
