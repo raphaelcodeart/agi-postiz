@@ -335,7 +335,7 @@ Rinnovo automatico: i certificati Let's Encrypt durano 90 giorni. Una volta otte
 ```bash
 crontab -e
 # Rinnovo certificato ogni notte alle 4:00 (no-op se non vicino a scadenza)
-0 4 * * * cd /opt/agi-agent && docker compose -f docker-compose.prod.yml run --rm certbot renew --quiet && docker compose -f docker-compose.prod.yml exec nginx nginx -s reload >> /opt/agi-agent/backups/certbot-renew.log 2>&1
+0 4 * * * cd /opt/agi-postiz && docker compose -f docker-compose.prod.yml run --rm certbot renew --quiet && docker compose -f docker-compose.prod.yml exec nginx nginx -s reload >> /opt/agi-postiz/backups/certbot-renew.log 2>&1
 ```
 
 ### Hostname temporaneo del provider (in attesa di un dominio)
@@ -365,11 +365,6 @@ attraverso il proprio proxy BFF same-origin. Per gli upload media pubblicati su 
 Quando arriverà un dominio vero, sostituite i tre hostname sslip.io in `nginx.conf` (vedi sopra),
 aggiornate `NEXT_PUBLIC_API_URL` e `PUBLIC_MEDIA_BASE_URL` nel `.env` e la lista CORS in
 `apps/api/app/main.py`, poi rifate la procedura dei certificati.
-
-> **Nota storica**: il repository originale da cui è nato questo progetto serviva anche un sito
-> statico di marketing (`agimarketing.app`) da un secondo repository, montato in `nginx` come
-> volume e con i propri vhost. In questo progetto quei vhost e quel mount **non ci sono**: la
-> piattaforma serve solo `app./api./media.` più l'hostname temporaneo qui sopra.
 
 Il cron di rinnovo descritto sopra copre **entrambi** i certificati (sslip.io e hostname temporaneo): `certbot renew` rinnova in un colpo solo tutti i certificati emessi su questo host, non serve una riga per ciascuno.
 
@@ -414,10 +409,10 @@ Su questo server è già installato così (verificalo con `crontab -l` e replica
 ```bash
 crontab -e
 # Backup completo settimanale, ogni domenica alle 3:30, con pulizia automatica
-30 3 * * 0 cd /opt/agi-agent && /usr/bin/env bash scripts/weekly-backup-db.sh >> /opt/agi-agent/weekly-backup-db/cron.log 2>&1
+30 3 * * 0 cd /opt/agi-postiz && /usr/bin/env bash scripts/weekly-backup-db.sh >> /opt/agi-postiz/weekly-backup-db/cron.log 2>&1
 ```
 
-(sostituisci `/opt/agi-agent` con il path reale del progetto sul server, se diverso).
+(sostituisci `/opt/agi-postiz` con il path reale del progetto sul server, se diverso).
 
 ---
 

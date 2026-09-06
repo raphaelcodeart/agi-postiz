@@ -159,7 +159,7 @@ def _platform_breakdown(rows: Sequence[Any]) -> list[dict[str, Any]]:
 
 def build_public_summary(db: Session) -> dict[str, Any]:
     """Anonymous, aggregate-only snapshot for the public marketing site
-    (agimarketing.app) - see app/api/v1/public_stats.py. Deliberately never
+    - see app/api/v1/public_stats.py. Deliberately never
     touches User/SocialChannel names or ids: only platform-level totals and
     plain counts leave this function."""
     rows = db.query(StatPostMetric).all()

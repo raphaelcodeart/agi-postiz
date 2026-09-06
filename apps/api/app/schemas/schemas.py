@@ -1136,7 +1136,7 @@ class PublicPlatformStats(BaseModel):
 
 class PublicStatsResponse(BaseModel):
     """Anonymous, aggregate-only snapshot exposed without authentication to
-    the public marketing site (agimarketing.app) - see
+    a public marketing site - see
     app/api/v1/public_stats.py and docs/STATISTICS.md."""
     post_count: int
     campaign_count: int

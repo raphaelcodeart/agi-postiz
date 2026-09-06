@@ -1,5 +1,5 @@
-"""Public, unauthenticated read-only statistics for the marketing site
-(agimarketing.app) - see docs/STATISTICS.md §5.
+"""Public, unauthenticated read-only statistics for a public marketing site
+- see docs/STATISTICS.md §5.
 
 Deliberately outside get_current_admin: this router exposes aggregate-only
 totals (per platform, never per user/channel - see
@@ -22,10 +22,11 @@ from app.services import statistics_service
 
 router = APIRouter()
 
-_ALLOWED_ORIGINS = {
-    "https://agimarketing.app",
-    "https://www.agimarketing.app",
-}
+# Origins allowed to read this endpoint from a browser. Empty on purpose: this
+# project has no public marketing site yet, so nothing is authorised to call it
+# cross-origin. Add the site's exact origins here when one exists - the endpoint
+# keeps working server-side (curl, SSR) regardless of this list.
+_ALLOWED_ORIGINS: set[str] = set()
 
 
 @router.get("", response_model=PublicStatsResponse)
