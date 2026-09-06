@@ -12,7 +12,7 @@ from app.models.publication import Publication
 from app.models.media import MediaFile
 from app.models.audit import AuditLog
 from app.core.security import EncryptionService
-from app.integrations.buffer.service import get_buffer_client
+from app.integrations.providers import get_provider_context
 from app.integrations.buffer.exceptions import BufferApiError
 from app.services.campaign_resolver import CampaignResolver
 from app.schemas.schemas import (
@@ -233,7 +233,8 @@ def get_campaign_metrics(
         .all()
     )
 
-    client = get_buffer_client()
+    # Il client si risolve per pubblicazione (riga sotto): canali di provider
+    # diversi nella stessa campagna usano client e credenziali diverse.
     totals: Dict[str, float] = {}
     # Per developers.buffer.com/types/PostMetricUnit.html, "percentage" metrics
     # (currently only engagementRate) are already a 0-100 rate, not a count - they
@@ -254,11 +255,11 @@ def get_campaign_metrics(
         )
 
         try:
-            token = EncryptionService.decrypt(connection.access_token_encrypted) if connection else None
-            if not token:
-                raise BufferApiError("Connessione Buffer non disponibile", category="auth_error")
+            if not connection:
+                raise BufferApiError("Connessione non disponibile", category="auth_error")
 
-            result = client.get_post_metrics(token, pub.external_post_id)
+            provider_ctx = get_provider_context(connection)
+            result = provider_ctx.client.get_post_metrics(provider_ctx.api_key, pub.external_post_id)
             entry.metrics = [PostMetricValue(**m) for m in result.get("metrics", [])]
             entry.metrics_updated_at = result.get("metrics_updated_at")
 

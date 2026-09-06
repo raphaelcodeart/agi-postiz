@@ -36,7 +36,7 @@ from app.core.config import settings
 from app.core.security import EncryptionService
 from app.db.session import SessionLocal
 from app.integrations.buffer.exceptions import BufferApiError, BufferRateLimitError
-from app.integrations.buffer.service import get_buffer_client
+from app.integrations.providers import PROVIDER_BUFFER, get_provider_context, resolve_rate_limit_scope
 from app.models.publication import Publication
 from app.models.statistics import StatMetricHistory, StatPostMetric, StatSyncRun
 from app.services.rate_limiter import RateLimiter
@@ -133,20 +133,21 @@ def sync_publication_now(db, pub: Publication) -> StatPostMetric:
     request/response, same shape as the existing live metrics endpoints in
     campaigns.py/publications.py but persisted."""
     rate_limiter = RateLimiter()
-    if not rate_limiter.acquire_lock(pub.buffer_connection_id):
-        raise SyncBusyError("Connessione Buffer occupata da un'altra sincronizzazione, riprova tra poco.")
+    if not pub.buffer_connection:
+        raise BufferApiError("Connessione non disponibile", category="auth_error")
+
+    provider_ctx = get_provider_context(pub.buffer_connection)
+    rate_scope = provider_ctx.rate_limit_scope
+
+    if not rate_limiter.acquire_lock(rate_scope):
+        raise SyncBusyError("Connessione occupata da un'altra sincronizzazione, riprova tra poco.")
 
     try:
-        client = get_buffer_client()
-        token = EncryptionService.decrypt(pub.buffer_connection.access_token_encrypted) if pub.buffer_connection else ""
-        if not token:
-            raise BufferApiError("Connessione Buffer non disponibile", category="auth_error")
-
-        result = client.get_post_metrics(token, pub.external_post_id)
+        result = provider_ctx.client.get_post_metrics(provider_ctx.api_key, pub.external_post_id)
         _apply_metrics(db, pub, sync_run_id=None, result=result)
         db.commit()
     except BufferRateLimitError as e:
-        rate_limiter.pause_connection(pub.buffer_connection_id, duration_seconds=60)
+        rate_limiter.pause_connection(rate_scope, duration_seconds=60)
         _record_sync_error(db, pub, str(e))
         db.commit()
         raise
@@ -155,7 +156,7 @@ def sync_publication_now(db, pub: Publication) -> StatPostMetric:
         db.commit()
         raise
     finally:
-        rate_limiter.release_lock(pub.buffer_connection_id)
+        rate_limiter.release_lock(rate_scope)
 
     return db.query(StatPostMetric).filter(StatPostMetric.publication_id == pub.id).first()
 
@@ -174,27 +175,36 @@ def sync_publication_metrics_task(self, publication_id_str: str, sync_run_id_str
             logger.info("Publication or sync run missing, skipping (%s / %s)", publication_id_str, sync_run_id_str)
             return
 
-        if not rate_limiter.acquire_lock(pub.buffer_connection_id):
+        if not pub.buffer_connection:
+            _record_sync_error(db, pub, "Connessione non disponibile")
+            db.commit()
+            return
+
+        try:
+            provider_ctx = get_provider_context(pub.buffer_connection)
+        except BufferApiError as e:
+            _record_sync_error(db, pub, e.message)
+            db.commit()
+            return
+
+        rate_scope = provider_ctx.rate_limit_scope
+
+        if not rate_limiter.acquire_lock(rate_scope):
             self.retry(countdown=settings.PAUSE_BETWEEN_REQUESTS_SECONDS)
             return
 
         synced = False
         try:
-            client = get_buffer_client()
-            token = EncryptionService.decrypt(pub.buffer_connection.access_token_encrypted) if pub.buffer_connection else ""
-            if not token:
-                raise BufferApiError("Connessione Buffer non disponibile", category="auth_error")
-
-            result = client.get_post_metrics(token, pub.external_post_id)
+            result = provider_ctx.client.get_post_metrics(provider_ctx.api_key, pub.external_post_id)
             _apply_metrics(db, pub, run.id, result)
             synced = True
         except BufferRateLimitError as e:
-            rate_limiter.pause_connection(pub.buffer_connection_id, duration_seconds=60)
+            rate_limiter.pause_connection(rate_scope, duration_seconds=60)
             _record_sync_error(db, pub, str(e))
         except Exception as e:
             _record_sync_error(db, pub, str(e))
         finally:
-            rate_limiter.release_lock(pub.buffer_connection_id)
+            rate_limiter.release_lock(rate_scope)
 
         # Incremento atomico a livello di riga (UPDATE ... SET col = col + 1),
         # non un read-modify-write in Python: il worker di produzione gira a
@@ -233,11 +243,15 @@ def _dispatch_sync(db, run: StatSyncRun, publications: list[Publication], force:
     run.status = "running"
     db.commit()
 
-    # Scala la partenza di ogni post sulla stessa connessione Buffer di
-    # PAUSE_BETWEEN_REQUESTS_SECONDS, ma lascia partire subito i post di
-    # connessioni diverse (client diversi = API key diverse, nessun motivo di
-    # farli aspettare l'uno per l'altro).
-    next_slot: dict[uuid.UUID, int] = {}
+    # Scala la partenza di ogni post sullo stesso *scope di quota* di
+    # PAUSE_BETWEEN_REQUESTS_SECONDS, lasciando partire subito quelli di scope
+    # diversi. Su Buffer lo scope e' la singola connessione (ogni cliente ha la
+    # propria API key, nessun motivo di farli aspettare l'uno per l'altro); su
+    # un provider multi-tenant e' il provider intero, perche' tutte le
+    # connessioni escono con la stessa chiave e condividono una quota sola -
+    # distanziarle per connessione le farebbe partire tutte insieme contro lo
+    # stesso limite. Vedi services/rate_limiter.py.
+    next_slot: dict[str, int] = {}
     dispatched = 0
 
     for pub in publications:
@@ -246,8 +260,12 @@ def _dispatch_sync(db, run: StatSyncRun, publications: list[Publication], force:
             run.skipped_posts += 1
             continue
 
-        countdown = next_slot.get(pub.buffer_connection_id, 0)
-        next_slot[pub.buffer_connection_id] = countdown + settings.PAUSE_BETWEEN_REQUESTS_SECONDS
+        scope = resolve_rate_limit_scope(
+            (pub.buffer_connection.provider if pub.buffer_connection else PROVIDER_BUFFER),
+            pub.buffer_connection,
+        ) if pub.buffer_connection else f"conn:{pub.buffer_connection_id}"
+        countdown = next_slot.get(scope, 0)
+        next_slot[scope] = countdown + settings.PAUSE_BETWEEN_REQUESTS_SECONDS
         sync_publication_metrics_task.apply_async(
             args=[str(pub.id), str(run.id), force],
             countdown=countdown,

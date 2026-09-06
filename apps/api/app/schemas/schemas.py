@@ -115,6 +115,10 @@ class BufferConnectionCreateRequest(BaseModel):
 class BufferConnectionResponse(BaseModel):
     id: uuid.UUID
     user_id: uuid.UUID
+    # Which upstream this connection publishes through ("buffer",
+    # "bundle_social"). Never exposes the key itself, only its origin.
+    provider: str
+    provider_label: Optional[str] = None
     authentication_type: str
     external_account_id: Optional[str]
     status: str
@@ -138,6 +142,11 @@ class SocialChannelResponse(BaseModel):
     id: uuid.UUID
     user_id: uuid.UUID
     external_channel_id: str
+    # Origin of the channel, shown as a badge in the dashboard and usable as a
+    # campaign filter. "buffer" = the user connected it through their own Buffer
+    # account; "bundle_social" = they connected it directly on our platform.
+    provider: str = "buffer"
+    provider_label: Optional[str] = None
     platform: str
     name: str
     username: Optional[str]

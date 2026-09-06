@@ -13,7 +13,7 @@ from app.models.campaign import Campaign, CampaignTarget
 from app.models.media import MediaFile
 from app.tasks.publication import process_publication_task
 from app.core.security import EncryptionService
-from app.integrations.buffer.service import get_buffer_client
+from app.integrations.providers import get_provider_context
 from app.integrations.buffer.exceptions import BufferApiError
 from app.schemas.schemas import (
     PublicationResponse,
@@ -162,7 +162,6 @@ def get_publication_metrics(
 
     channel = pub.social_channel
     connection = pub.buffer_connection
-    client = get_buffer_client()
 
     entry = ChannelMetrics(
         publication_id=pub.id,
@@ -174,11 +173,11 @@ def get_publication_metrics(
     )
 
     try:
-        token = EncryptionService.decrypt(connection.access_token_encrypted) if connection else None
-        if not token:
-            raise BufferApiError("Connessione Buffer non disponibile", category="auth_error")
+        if not connection:
+            raise BufferApiError("Connessione non disponibile", category="auth_error")
 
-        result = client.get_post_metrics(token, pub.external_post_id)
+        provider_ctx = get_provider_context(connection)
+        result = provider_ctx.client.get_post_metrics(provider_ctx.api_key, pub.external_post_id)
         entry.metrics = [PostMetricValue(**m) for m in result.get("metrics", [])]
         entry.metrics_updated_at = result.get("metrics_updated_at")
 

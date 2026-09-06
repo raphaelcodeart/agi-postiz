@@ -10,7 +10,7 @@ from app.db.session import SessionLocal
 from app.core.config import settings
 from app.core.security import EncryptionService
 from app.services.rate_limiter import RateLimiter
-from app.integrations.buffer.service import get_buffer_client
+from app.integrations.providers import PROVIDER_BUNDLE_SOCIAL, get_provider_context
 from app.integrations.buffer.exceptions import BufferApiError, BufferRateLimitError
 from app.models.campaign import Campaign, CampaignTarget
 from app.models.buffer import SocialChannel
@@ -18,6 +18,19 @@ from app.models.media import MediaFile
 from app.models.publication import Publication, PublicationAttempt
 
 logger = get_task_logger(__name__)
+
+
+def _provider_is_live(provider: str) -> bool:
+    """
+    True when the resolved provider talks to a real upstream rather than a mock.
+
+    Guards that used to read BUFFER_INTEGRATION_MODE directly must go through
+    this instead: with more than one provider the global Buffer flag no longer
+    describes the call actually being made.
+    """
+    if provider == PROVIDER_BUNDLE_SOCIAL:
+        return settings.BUNDLE_SOCIAL_INTEGRATION_MODE.lower() == "production"
+    return settings.BUFFER_INTEGRATION_MODE.lower() == "production"
 
 @celery.task(name="app.tasks.publication.process_publication", bind=True, max_retries=3)
 def process_publication_task(self, publication_id_str: str) -> None:
@@ -51,9 +64,26 @@ def process_publication_task(self, publication_id_str: str) -> None:
         pub.processing_started_at = datetime.now(timezone.utc)
         db.commit()
 
+        # Resolve the provider before touching the rate limiter: the scope under
+        # which concurrency is enforced depends on it (per connection for
+        # Buffer, per provider for shared-quota providers like bundle.social).
+        # A configuration/credential problem surfaces here as a normal failed
+        # attempt rather than an unhandled exception.
+        try:
+            provider_ctx = get_provider_context(pub.buffer_connection)
+        except BufferApiError as e:
+            pub.status = "retry_wait"
+            pub.next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=60)
+            pub.error_message = e.message
+            db.commit()
+            logger.error(f"Provider resolution failed for publication {publication_id_str}: {e.message}")
+            return
+
+        rate_scope = provider_ctx.rate_limit_scope
+
         # Check rate limiter availability
-        if not rate_limiter.acquire_lock(pub.buffer_connection_id):
-            logger.info(f"Rate limit or concurrency cap hit for connection {pub.buffer_connection_id}. Re-queuing.")
+        if not rate_limiter.acquire_lock(rate_scope):
+            logger.info(f"Rate limit or concurrency cap hit for scope {rate_scope}. Re-queuing.")
             # Reset to retry_wait with a small delay
             pub.status = "retry_wait"
             pub.next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=15)
@@ -73,10 +103,9 @@ def process_publication_task(self, publication_id_str: str) -> None:
         started_time = time.time()
         
         try:
-            # 1. Fetch tokens
-            access_token = EncryptionService.decrypt(pub.buffer_connection.access_token_encrypted)
-            if not access_token:
-                raise BufferApiError("Credentials missing, connection needs reconnection.", category="auth_error")
+            # 1. Credentials already resolved with the provider context above
+            # (decryption for Buffer, platform key for a multi-tenant provider).
+            access_token = provider_ctx.api_key
 
             # 2. Resolve media attachments
             media_url = None
@@ -99,7 +128,7 @@ def process_publication_task(self, publication_id_str: str) -> None:
             # HTTPS - see https://developers.buffer.com/guides/hosting-media.html. This
             # server has no HTTPS media hosting configured yet, so refuse rather than
             # send Buffer a URL we already know it can never reach.
-            if media_url and settings.BUFFER_INTEGRATION_MODE.lower() == "production" and not media_url.startswith("https://"):
+            if media_url and _provider_is_live(provider_ctx.provider) and not media_url.startswith("https://"):
                 raise BufferApiError(
                     "Pubblicazione con media non disponibile: richiede hosting media HTTPS, non ancora configurato sul server.",
                     category="configuration_error",
@@ -111,7 +140,7 @@ def process_publication_task(self, publication_id_str: str) -> None:
             youtube_title = (campaign.youtube_title or campaign.title) if platform == "youtube" else None
 
             # 4. Dispatch API request
-            client = get_buffer_client()
+            client = provider_ctx.client
             res = client.create_post(
                 api_key=access_token,
                 channel_id=pub.social_channel.external_channel_id,
@@ -140,7 +169,7 @@ def process_publication_task(self, publication_id_str: str) -> None:
             # Handle rate-limit pause
             if isinstance(e, BufferRateLimitError):
                 # Pause connection for 60 seconds
-                rate_limiter.pause_connection(pub.buffer_connection_id, duration_seconds=60)
+                rate_limiter.pause_connection(rate_scope, duration_seconds=60)
                 
         except Exception as e:
             err_message = str(e)
@@ -171,7 +200,7 @@ def process_publication_task(self, publication_id_str: str) -> None:
         db.add(attempt)
         
         # Release concurrency locks
-        rate_limiter.release_lock(pub.buffer_connection_id)
+        rate_limiter.release_lock(rate_scope)
 
         # Update Publication attributes
         pub.attempt_count = attempt_number

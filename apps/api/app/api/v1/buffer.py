@@ -9,7 +9,13 @@ from app.models.administrator import Administrator
 from app.models.buffer import BufferConnection, BufferOrganization, SocialChannel
 from app.core.security import EncryptionService
 from app.integrations.buffer.service import get_buffer_client
-from app.integrations.buffer.exceptions import BufferAuthError
+from app.integrations.buffer.exceptions import BufferApiError, BufferAuthError
+from app.integrations.providers import (
+    PROVIDER_BUFFER,
+    PROVIDER_BUNDLE_SOCIAL,
+    SUPPORTED_PROVIDERS,
+    get_provider_context,
+)
 from app.tasks.sync import sync_buffer_connection
 from app.schemas.schemas import (
     BufferConnectionCreateRequest,
@@ -56,7 +62,14 @@ def create_or_update_connection(
     ext_account_id = account_info.get("id")
     enc_key = EncryptionService.encrypt(payload.api_key)
 
-    connection = db.query(BufferConnection).filter(BufferConnection.user_id == payload.user_id).first()
+    # Scoped to the Buffer provider: a user may hold one connection per provider
+    # (uq_buffer_connection_user_provider), so this endpoint - which is
+    # specifically "paste your personal Buffer key" - must not pick up, nor
+    # overwrite, a connection created by a different provider's flow.
+    connection = db.query(BufferConnection).filter(
+        BufferConnection.user_id == payload.user_id,
+        BufferConnection.provider == PROVIDER_BUFFER,
+    ).first()
     if connection:
         connection.authentication_type = "personal_api_key"
         connection.external_account_id = ext_account_id
@@ -68,6 +81,7 @@ def create_or_update_connection(
     else:
         connection = BufferConnection(
             user_id=payload.user_id,
+            provider=PROVIDER_BUFFER,
             authentication_type="personal_api_key",
             external_account_id=ext_account_id,
             access_token_encrypted=enc_key,

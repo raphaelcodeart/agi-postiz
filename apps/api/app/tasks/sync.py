@@ -4,7 +4,9 @@ from celery.utils.log import get_task_logger
 from app.workers.celery_app import celery
 from app.db.session import SessionLocal
 from app.core.security import EncryptionService
+from app.integrations.buffer.exceptions import BufferApiError
 from app.integrations.buffer.service import get_buffer_client
+from app.integrations.providers import get_provider_context
 from app.integrations.buffer.exceptions import BufferAuthError
 from app.models.buffer import BufferConnection, BufferOrganization, SocialChannel
 
@@ -25,22 +27,24 @@ def sync_buffer_connection(connection_id_str: str) -> None:
             logger.error(f"Buffer Connection {connection_id_str} not found.")
             return
 
-        client = get_buffer_client()
-        
-        # Decrypt access token
+        # Client and credentials both come from the provider context: for Buffer
+        # that decrypts the user's own key, for a multi-tenant provider it
+        # resolves the platform key plus this user's team ref.
         try:
-            token = EncryptionService.decrypt(conn.access_token_encrypted)
+            provider_ctx = get_provider_context(conn)
+        except BufferApiError as e:
+            conn.status = "error"
+            conn.last_error = e.message
+            db.commit()
+            return
         except Exception as e:
             conn.status = "error"
-            conn.last_error = f"Token decryption failed: {str(e)}"
+            conn.last_error = f"Provider resolution failed: {str(e)}"
             db.commit()
             return
 
-        if not token:
-            conn.status = "error"
-            conn.last_error = "Access token is empty"
-            db.commit()
-            return
+        client = provider_ctx.client
+        token = provider_ctx.api_key
 
         # 1. Sync Organizations
         try:
@@ -101,11 +105,15 @@ def sync_buffer_connection(connection_id_str: str) -> None:
                     if existing_chan:
                         for k, v in chan_properties.items():
                             setattr(existing_chan, k, v)
+                        existing_chan.provider = conn.provider
                         chan = existing_chan
                     else:
                         chan = SocialChannel(
                             buffer_organization_id=org.id,
                             external_channel_id=ext_chan_id,
+                            # Denormalized from the connection so campaigns can
+                            # filter by origin without a two-level join.
+                            provider=conn.provider,
                             publication_mode="automatic",
                             auto_publish_enabled=True,
                             **chan_properties
@@ -181,7 +189,20 @@ def sync_all_buffer_connections() -> None:
 @celery.task(name="app.tasks.sync.refresh_expired_tokens")
 def refresh_expired_tokens() -> None:
     """
-    Checks for all connections nearing expiration (or expired) and refreshes their access tokens.
+    LEGACY, currently a no-op by construction - kept for the day a provider with
+    expiring OAuth tokens is added.
+
+    It dates from when Buffer still offered third-party OAuth. Neither provider
+    in use today has a per-connection token to refresh: Buffer authenticates
+    with a personal API key that never expires (so token_expires_at is always
+    NULL and the query below matches nothing), and a multi-tenant provider
+    authenticates with our own platform key, which is not stored per connection.
+
+    Note it calls ``client.refresh_token()``, which is NOT part of
+    BaseBufferClient: reaching that line with a real connection would raise
+    AttributeError. The provider filter below makes that unreachable rather
+    than merely unlikely. Implement refresh_token on the client interface before
+    enabling this for any provider.
     """
     db = SessionLocal()
     try:
@@ -189,14 +210,17 @@ def refresh_expired_tokens() -> None:
         limit_time = datetime.now(timezone.utc) + timedelta(days=2)
         expiring_connections = db.query(BufferConnection).filter(
             BufferConnection.status.in_(["connected", "expired"]),
-            BufferConnection.token_expires_at <= limit_time
+            BufferConnection.token_expires_at.isnot(None),
+            BufferConnection.token_expires_at <= limit_time,
+            # No provider currently supports refresh - see the docstring.
+            BufferConnection.authentication_type == "oauth",
         ).all()
 
         if not expiring_connections:
             return
 
         client = get_buffer_client()
-        logger.info(f"Found {len(expiring_connections)} expiring Buffer connections. Starting refresh.")
+        logger.info(f"Found {len(expiring_connections)} expiring connections. Starting refresh.")
 
         for conn in expiring_connections:
             try:

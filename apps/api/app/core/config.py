@@ -26,6 +26,17 @@ class Settings(BaseSettings):
     # pasted into the dashboard, not OAuth (see app/integrations/buffer/client.py)
     BUFFER_INTEGRATION_MODE: str = "mock"  # "mock" or "production"
 
+    # bundle.social: multi-tenant provider where ONE platform key serves every
+    # end user, who is identified by team id instead. Keep "mock" until the
+    # production client is completed - see
+    # app/integrations/bundle_social/prod_client.py.
+    BUNDLE_SOCIAL_INTEGRATION_MODE: str = "mock"  # "mock" or "production"
+    BUNDLE_SOCIAL_API_KEY: str = ""
+    # Every connection of this provider shares one upstream quota, so its
+    # concurrency is capped per provider rather than per connection
+    # (see services/rate_limiter.py).
+    BUNDLE_SOCIAL_CONCURRENCY_LIMIT: int = 4
+
     # OpenAI - optional, powers the campaign wizard's AI text-generation helper
     # (app/integrations/openai/client.py). Feature is hidden in the dashboard
     # when unset; never exposed to the frontend, requests are proxied server-side.
