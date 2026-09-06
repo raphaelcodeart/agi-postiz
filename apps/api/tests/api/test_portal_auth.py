@@ -114,3 +114,39 @@ def test_registration_never_overwrites_an_existing_password():
     source = inspect.getsource(portal.register)
     assert "if existing.password_hash" in source
     assert "409" in source
+
+
+# --- connect request validation ---------------------------------------------
+
+def test_single_character_platform_is_accepted():
+    """
+    "x" is a real platform and the only one whose name is a single character.
+    A min_length of 2 on the request model rejected it with a 422 before it ever
+    reached the allow-list that does the actual validation - so every other
+    platform worked and X alone failed, which reads as a provider problem rather
+    than ours. Regression guard.
+    """
+    from app.api.v1.portal import ConnectLinkRequest
+
+    assert ConnectLinkRequest(platform="x").platform == "x"
+
+
+def test_x_is_offered_and_maps_to_the_provider_enum():
+    from app.api.v1.portal import CONNECTABLE_PLATFORMS
+    from app.integrations.bundle_social.prod_client import PLATFORM_TO_BUNDLE
+
+    assert "x" in CONNECTABLE_PLATFORMS
+    # Every platform the UI offers must be one the provider actually accepts,
+    # or the button exists and cannot work.
+    for platform in CONNECTABLE_PLATFORMS:
+        assert platform in PLATFORM_TO_BUNDLE, f"'{platform}' offerta ma non mappata sul provider"
+
+
+def test_empty_platform_is_still_rejected():
+    """Relaxing the floor to 1 must not let an empty value through."""
+    import pytest as _pytest
+    from pydantic import ValidationError
+    from app.api.v1.portal import ConnectLinkRequest
+
+    with _pytest.raises(ValidationError):
+        ConnectLinkRequest(platform="")

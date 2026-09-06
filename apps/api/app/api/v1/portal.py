@@ -442,20 +442,29 @@ def get_my_stats(
 # --------------------------------------------------------------------------
 
 class ConnectLinkRequest(BaseModel):
-    # Provider-side platform identifier ("instagram", "facebook", "tiktok"...).
-    platform: str = Field(min_length=2, max_length=40)
+    # Platform identifier ("instagram", "facebook", "tiktok"...).
+    # min_length is 1, not 2: "x" is a legitimate value and the only platform
+    # whose name is a single character. A length floor of 2 silently rejected it
+    # with a 422 before it ever reached the allow-list below, which is the real
+    # validation. Keep it at 1.
+    platform: str = Field(min_length=1, max_length=40)
 
 
 class ConnectLinkResponse(BaseModel):
     url: str
 
 
-# Platforms offered in the portal's connect panel. Sourced from bundle.social's
-# published provider list; the panel renders exactly these, so adding one here is
-# all it takes to expose it once the provider is live.
+# Platforms offered in the portal's connect panel.
+#
+# This list is the enum the hosted connect flow actually accepts, read back from
+# the API itself on 2026-09-06 (send an invalid value and it names the valid
+# ones). It is NOT the provider's marketing list: "telegram" was on that one and
+# is rejected by this endpoint, so offering it produced a button that could only
+# fail. A test asserts every entry here maps to a provider value.
 CONNECTABLE_PLATFORMS = [
     "instagram", "facebook", "tiktok", "youtube", "linkedin", "x",
-    "threads", "pinterest", "bluesky", "mastodon", "reddit", "telegram",
+    "threads", "pinterest", "reddit", "bluesky", "mastodon",
+    "discord", "slack", "snapchat", "google_business",
 ]
 
 

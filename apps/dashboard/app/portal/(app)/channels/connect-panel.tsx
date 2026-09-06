@@ -18,6 +18,9 @@ import { PlatformIcon } from "@/components/shared/platform-badge";
  * failure: "not available yet" and "something broke" call for different
  * reactions from the person reading it.
  */
+// Must stay a subset of CONNECTABLE_PLATFORMS in apps/api/app/api/v1/portal.py,
+// which mirrors the enum the provider's hosted flow accepts. A button for a
+// platform the provider rejects is a button that can only fail.
 const PLATFORMS = [
   { id: "instagram", label: "Instagram" },
   { id: "facebook", label: "Facebook" },
@@ -27,7 +30,27 @@ const PLATFORMS = [
   { id: "x", label: "X" },
   { id: "threads", label: "Threads" },
   { id: "pinterest", label: "Pinterest" },
+  { id: "reddit", label: "Reddit" },
+  { id: "bluesky", label: "Bluesky" },
+  { id: "mastodon", label: "Mastodon" },
+  { id: "snapchat", label: "Snapchat" },
 ];
+
+/**
+ * FastAPI returns a plain string for our own errors, but an ARRAY of objects for
+ * validation failures. Rendering that array as a React child crashes the page
+ * into an error boundary, which is how a simple 422 surfaced to the user as
+ * "si e' verificato un errore imprevisto" with no clue what went wrong.
+ */
+function errorMessage(payload: unknown, fallback: string): string {
+  const detail = (payload as { detail?: unknown } | null)?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const first = detail[0] as { msg?: string } | undefined;
+    if (first?.msg) return first.msg;
+  }
+  return fallback;
+}
 
 export function ConnectChannelPanel() {
   const router = useRouter();
@@ -43,7 +66,7 @@ export function ConnectChannelPanel() {
         const response = await fetch("/api/portal/backend/connect/sync", { method: "POST" });
         const payload = await response.json().catch(() => null);
         if (!response.ok) {
-          setMessage(payload?.detail ?? "Aggiornamento non riuscito.");
+          setMessage(errorMessage(payload, "Aggiornamento non riuscito."));
           return;
         }
         // Silent on the automatic pass: the freshly imported channel appearing
@@ -119,7 +142,7 @@ export function ConnectChannelPanel() {
         return;
       }
 
-      setMessage(payload?.detail ?? "Collegamento non riuscito. Riprova fra poco.");
+      setMessage(errorMessage(payload, "Collegamento non riuscito. Riprova fra poco."));
     } catch {
       setMessage("Servizio non raggiungibile. Riprova fra poco.");
     } finally {
