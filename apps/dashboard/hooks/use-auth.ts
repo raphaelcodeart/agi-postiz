@@ -1,7 +1,6 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
 import * as authService from "@/services/auth";
 import { queryKeys } from "@/lib/query/keys";
 
@@ -21,14 +20,23 @@ export function useLogin() {
 }
 
 export function useLogout() {
-  const router = useRouter();
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: authService.logout,
     onSuccess: () => {
       queryClient.clear();
-      router.push("/login");
-      router.refresh();
+      // Hard navigation, not router.push + router.refresh.
+      //
+      // The refresh issues an RSC request for the page being left, and the
+      // session cookie is already gone by then, so the route guard answers with
+      // a 307 to /login. The client router cannot read a bare redirect as an RSC
+      // payload: it throws, and the global error boundary shows "si è verificato
+      // un errore imprevisto" - on a logout that actually succeeded.
+      //
+      // A full page load sidesteps the RSC round trip entirely and leaves no
+      // client cache or in-flight query behind, which is what you want after
+      // signing out anyway.
+      window.location.href = "/login";
     },
   });
 }
