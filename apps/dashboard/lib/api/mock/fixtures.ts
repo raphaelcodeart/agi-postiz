@@ -82,6 +82,7 @@ export const mockConnections: BufferConnectionResponse[] = [
   {
     id: "conn-algarve",
     user_id: "usr-algarve",
+    provider: "buffer",
     authentication_type: "personal_api_key",
     external_account_id: "buffer-acc-1",
     status: "connected",
@@ -92,6 +93,7 @@ export const mockConnections: BufferConnectionResponse[] = [
   {
     id: "conn-sintra",
     user_id: "usr-sintra",
+    provider: "buffer",
     authentication_type: "personal_api_key",
     external_account_id: "buffer-acc-2",
     status: "expired",

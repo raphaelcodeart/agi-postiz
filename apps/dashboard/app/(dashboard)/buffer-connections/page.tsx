@@ -67,7 +67,8 @@ export default function BufferConnectionsPage() {
             <div>
               <span>{usersById.get(row.original.user_id) ?? row.original.user_id}</span>
               <span className="block text-[10px] text-muted-foreground">
-                ID Buffer: {row.original.external_account_id ?? "—"}
+                {row.original.provider === "bundle_social" ? "Collegato da noi" : "Buffer"}
+                {row.original.external_account_id ? ` · ${row.original.external_account_id}` : ""}
               </span>
             </div>
           </div>
@@ -112,10 +113,17 @@ export default function BufferConnectionsPage() {
               <RefreshCwIcon className="size-3.5" />
               Sincronizza
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => handleReconnect(row.original)}>
-              <LinkIcon className="size-3.5" />
-              Ricollega
-            </Button>
+            {/* "Ricollega" asks for a personal Buffer API key, which only exists
+                for Buffer connections. On a connection made through our own
+                provider the user authorised us directly and there is no key to
+                paste - offering the button there produced a dialog asking for
+                something that cannot exist, and saved an empty token. */}
+            {row.original.provider !== "bundle_social" && (
+              <Button variant="ghost" size="sm" onClick={() => handleReconnect(row.original)}>
+                <LinkIcon className="size-3.5" />
+                Ricollega
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"

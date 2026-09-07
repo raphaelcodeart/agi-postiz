@@ -31,6 +31,14 @@ services:
       retries: 5
 
   api:
+    # api, worker and beat run the SAME code with different commands, so they
+    # share ONE image. They used to declare three separate build blocks, which
+    # produced three separate images - and rebuilding only one of them (e.g.
+    # `docker compose build api`) left the worker executing stale code while
+    # everything looked deployed. The worker is what actually publishes, so that
+    # failure is invisible until a campaign misbehaves. One image, one build,
+    # no way for them to drift apart.
+    image: agi-postiz-api
     build:
       context: ./apps/api
       dockerfile: Dockerfile
@@ -48,9 +56,9 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   worker:
-    build:
-      context: ./apps/api
-      dockerfile: Dockerfile
+    # Same image as api - see the note there. No build block on purpose: it must
+    # not be possible to build this service separately and have it drift.
+    image: agi-postiz-api
     container_name: agi_post_worker_prod
     restart: always
     depends_on:
@@ -65,9 +73,9 @@ services:
     command: celery -A app.workers.celery_app.celery worker --loglevel=warning -c 4
 
   beat:
-    build:
-      context: ./apps/api
-      dockerfile: Dockerfile
+    # Same image as api - see the note there. No build block on purpose: it must
+    # not be possible to build this service separately and have it drift.
+    image: agi-postiz-api
     container_name: agi_post_beat_prod
     restart: always
     depends_on:

@@ -192,6 +192,7 @@ export function createConnection(userId: string, apiKey: string): Promise<Buffer
   const connection: BufferConnectionResponse = {
     id: `conn-${crypto.randomUUID()}`,
     user_id: userId,
+    provider: "buffer",
     authentication_type: "personal_api_key",
     external_account_id: `buffer-acc-${crypto.randomUUID().slice(0, 8)}`,
     status: "connected",

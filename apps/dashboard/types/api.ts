@@ -70,6 +70,9 @@ export type BufferConnectionStatus =
   | "disconnected";
 
 export interface BufferConnectionResponse {
+  /** Upstream this connection publishes through: "buffer" | "bundle_social". */
+  provider: string;
+  provider_label?: string | null;
   id: string;
   user_id: string;
   authentication_type: string;
