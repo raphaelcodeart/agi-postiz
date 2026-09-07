@@ -278,3 +278,45 @@ def test_permalink_absent_returns_none_without_raising():
     assert ProductionBundleSocialClient._permalink_from({}) is None
     assert ProductionBundleSocialClient._permalink_from({"externalData": {}}) is None
     assert ProductionBundleSocialClient._permalink_from({"externalData": {"X": {}}}) is None
+
+
+def test_a_past_scheduled_date_is_published_now(monkeypatch):
+    """
+    The provider rejects a postDate more than 10 minutes in the past. A campaign
+    scheduled for 9:00 whose targets are still draining the publishing queue at
+    10:30 would otherwise fail every remaining one - which is exactly what
+    happened on the first real campaign.
+    """
+    from datetime import timedelta
+
+    captured = {}
+    client = _client()
+    monkeypatch.setattr(
+        client, "_request",
+        lambda *a, **k: (captured.update(k.get("json_body") or {}), {"id": "p", "errors": {}})[1],
+    )
+
+    past = datetime.now(timezone.utc) - timedelta(hours=3)
+    client.create_post(api_key="k", channel_id="sa", text="t", platform="facebook", scheduled_at=past)
+
+    sent = datetime.fromisoformat(captured["postDate"].replace("Z", "+00:00"))
+    assert sent > past, "una data passata deve diventare adesso"
+    assert (datetime.now(timezone.utc) - sent).total_seconds() < 60
+
+
+def test_a_future_scheduled_date_is_preserved(monkeypatch):
+    """Clamping must not turn a genuinely scheduled post into an immediate one."""
+    from datetime import timedelta
+
+    captured = {}
+    client = _client()
+    monkeypatch.setattr(
+        client, "_request",
+        lambda *a, **k: (captured.update(k.get("json_body") or {}), {"id": "p", "errors": {}})[1],
+    )
+
+    future = datetime.now(timezone.utc) + timedelta(days=2)
+    client.create_post(api_key="k", channel_id="sa", text="t", platform="facebook", scheduled_at=future)
+
+    sent = datetime.fromisoformat(captured["postDate"].replace("Z", "+00:00"))
+    assert abs((sent - future).total_seconds()) < 2

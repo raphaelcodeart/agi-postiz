@@ -385,7 +385,19 @@ class ProductionBundleSocialClient(BaseBufferClient):
                 category="validation_failed",
             )
 
-        post_date = scheduled_at or datetime.now(timezone.utc)
+        # bundle.social refuses a postDate more than 10 minutes in the past
+        # ("Scheduled date cannot be more than 10 minutes in the past"), so a
+        # scheduled time that has already gone by must become "now" rather than
+        # be sent as-is. This is not an edge case: a campaign scheduled for 9:00
+        # whose targets are still working through the publishing queue at 10:30,
+        # or one launched after its scheduled moment, both land here. Publishing
+        # a late post late is right; failing it is not.
+        now = datetime.now(timezone.utc)
+        post_date = scheduled_at or now
+        if post_date.tzinfo is None:
+            post_date = post_date.replace(tzinfo=timezone.utc)
+        if post_date < now:
+            post_date = now
 
         platform_data: Dict[str, Any] = {"text": text}
 
