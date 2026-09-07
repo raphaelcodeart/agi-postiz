@@ -118,15 +118,29 @@ def list_channels(
     user_id: Optional[uuid.UUID] = None,
     platform: Optional[str] = None,
     publication_mode: Optional[str] = None,
+    include_removed: bool = False,
     db: Session = Depends(get_db),
     admin: Administrator = Depends(get_current_admin)
 ):
-    """List social channels with filters."""
+    """
+    List social channels with filters.
+
+    Channels removed by their owner are excluded, matching how soft-deleted users
+    are treated everywhere in users.py: a removed channel is not a channel any
+    more, and listing it alongside live ones invites an administrator to act on
+    something that can no longer publish. The row survives for the publication
+    history that references it - see SocialChannel.deleted_at - and
+    include_removed brings it back into view when that history is what is being
+    looked for.
+    """
     query = db.query(SocialChannel, BufferConnection.user_id).join(
         BufferOrganization, SocialChannel.buffer_organization_id == BufferOrganization.id
     ).join(
         BufferConnection, BufferOrganization.buffer_connection_id == BufferConnection.id
     )
+
+    if not include_removed:
+        query = query.filter(SocialChannel.deleted_at.is_(None))
 
     if user_id:
         query = query.filter(BufferConnection.user_id == user_id)

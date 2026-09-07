@@ -74,3 +74,35 @@ def test_empty_payload_yields_no_keys():
     """
     assert _identity_keys("facebook", {}) == set()
     assert _identity_keys("facebook", {"username": None, "name": None}) == set()
+
+
+# --- removed channels ---------------------------------------------------------
+
+def test_removed_channels_are_excluded_everywhere_they_matter():
+    """
+    A channel removed by its owner must disappear from every list that invites
+    action on it, and from campaign targeting - but NOT from the statistics
+    drill-down, which is the reason the row survives at all.
+
+    Checked by reading the queries: exercising them needs a database, and the
+    property worth locking down is that the filter is present at all - it was
+    missing from the admin listing, where a removed channel showed up looking
+    exactly like a live one.
+    """
+    import inspect
+    from app.api.v1 import buffer as buffer_api
+    from app.api.v1 import portal as portal_api
+    from app.services import campaign_resolver
+
+    # Admin listing: excluded unless explicitly asked for.
+    admin_src = inspect.getsource(buffer_api.list_channels)
+    assert "include_removed" in admin_src
+    assert "SocialChannel.deleted_at.is_(None)" in admin_src
+
+    # Portal listing: the owner's own view, always excluded.
+    portal_src = inspect.getsource(portal_api._user_channels_query)
+    assert "SocialChannel.deleted_at.is_(None)" in portal_src
+
+    # Campaign targeting: the one that would actually publish to it.
+    resolver_src = inspect.getsource(campaign_resolver.CampaignResolver.resolve_targets)
+    assert "SocialChannel.deleted_at.is_(None)" in resolver_src
