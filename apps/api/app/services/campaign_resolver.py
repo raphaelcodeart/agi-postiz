@@ -140,6 +140,69 @@ class CampaignResolver:
         return query.all()
 
 
+
+    @staticmethod
+    def _explain_no_targets(db: Session) -> str:
+        """
+        Turn "no channels matched" into the actual reason.
+
+        Counts channels excluded by each criterion in resolve_targets, in the
+        order an administrator can act on them, and names the first that
+        explains the emptiness.
+        """
+        base = (
+            db.query(SocialChannel)
+            .join(BufferOrganization, SocialChannel.buffer_organization_id == BufferOrganization.id)
+            .join(BufferConnection, BufferOrganization.buffer_connection_id == BufferConnection.id)
+            .join(User, BufferConnection.user_id == User.id)
+            .filter(SocialChannel.deleted_at.is_(None))
+        )
+
+        total = base.count()
+        if total == 0:
+            return (
+                "Nessun canale social collegato. Gli utenti devono prima collegare "
+                "i propri canali dal portale."
+            )
+
+        inactive_users = base.filter(User.status != "active", User.deleted_at.is_(None)).count()
+        if inactive_users == total:
+            return (
+                f"Tutti i {total} canali appartengono a utenti non ancora attivi. "
+                "Attiva gli utenti dalla pagina Utenti per includerli nelle campagne."
+            )
+
+        disabled = base.filter(
+            User.status == "active",
+            SocialChannel.publication_mode == "disabled",
+        ).count()
+        inactive_channels = base.filter(
+            User.status == "active",
+            SocialChannel.is_active.is_(False),
+        ).count()
+        broken_connections = base.filter(
+            User.status == "active",
+            BufferConnection.status != "connected",
+        ).count()
+
+        motivi = []
+        if inactive_users:
+            motivi.append(f"{inactive_users} di utenti non attivi")
+        if disabled:
+            motivi.append(f"{disabled} con pubblicazione disabilitata")
+        if inactive_channels:
+            motivi.append(f"{inactive_channels} non piu' collegati")
+        if broken_connections:
+            motivi.append(f"{broken_connections} con connessione da ripristinare")
+
+        if motivi:
+            return f"Nessun canale utilizzabile su {total}: " + ", ".join(motivi) + "."
+
+        return (
+            f"Nessuno dei {total} canali collegati rientra nei criteri di questa "
+            "campagna. Verifica la selezione dei destinatari."
+        )
+
     @staticmethod
     def _affiliate_disclosure_texts(db: Session) -> tuple:
         """
@@ -371,7 +434,12 @@ class CampaignResolver:
         if not channels:
             campaign.status = "failed"
             db.commit()
-            raise ValueError("No valid social channels targetable for the selected parameters.")
+            # Say WHY, not just "none matched". The exclusion criteria are
+            # invisible from the campaign screen - an administrator looking at
+            # four healthy channels has no way to guess that their owners are
+            # still awaiting activation, which is the most common cause now that
+            # self-registered users start inactive by design.
+            raise ValueError(cls._explain_no_targets(db))
 
         publications_created = []
 
