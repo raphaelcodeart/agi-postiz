@@ -23,6 +23,7 @@ Verified contract:
 Auth is ``x-api-key: <platform key>`` - one key for the whole organization, not
 one per end user. The end user is identified by their team.
 """
+import hashlib
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -270,6 +271,79 @@ class ProductionBundleSocialClient(BaseBufferClient):
             return "page"
         return None
 
+
+    # -- media --------------------------------------------------------------
+
+    # An upload created without a teamId belongs to the ORGANIZATION and can be
+    # referenced by a post in any team - verified against the live API. That is
+    # what makes one upload per campaign possible instead of one per channel:
+    # the same video going out to 1000 promoters is transferred once, not a
+    # thousand times.
+    UPLOAD_CACHE_TTL_SECONDS = 6 * 60 * 60
+
+    def _upload_cache_key(self, media_url: str) -> str:
+        digest = hashlib.sha256(media_url.encode()).hexdigest()[:32]
+        return f"bundle_social:upload:{digest}"
+
+    def ensure_upload(self, api_key: str, media_url: str) -> str:
+        """
+        The provider's upload id for this media, uploading it once if needed.
+
+        bundle.social does not fetch media by URL the way Buffer does - it wants
+        the bytes - so the file is downloaded from our own media host and
+        forwarded. The resulting id is cached in Redis by source URL, so every
+        other publication of the same campaign reuses it.
+        """
+        import redis as redis_lib
+
+        cache = redis_lib.from_url(settings.REDIS_URL, decode_responses=True)
+        key = self._upload_cache_key(media_url)
+
+        cached = cache.get(key)
+        if cached:
+            return cached
+
+        try:
+            with httpx.Client(timeout=120.0, follow_redirects=True) as client:
+                download = client.get(media_url)
+                download.raise_for_status()
+                content = download.content
+                content_type = download.headers.get("content-type", "application/octet-stream")
+        except httpx.HTTPError as exc:
+            raise BufferApiError(
+                f"Media non scaricabile da {media_url}: {exc}",
+                category="invalid_media",
+            )
+
+        filename = media_url.rstrip("/").rsplit("/", 1)[-1].split("?")[0] or "media"
+
+        try:
+            with httpx.Client(timeout=180.0) as client:
+                response = client.post(
+                    f"{self.BASE_URL}/upload/",
+                    headers={"x-api-key": api_key},
+                    files={"file": (filename, content, content_type)},
+                )
+        except httpx.RequestError as exc:
+            raise BufferNetworkError(f"Upload verso bundle.social fallito: {exc}")
+
+        if response.status_code >= 400:
+            raise BufferApiError(
+                f"Upload rifiutato da bundle.social: {response.text[:300]}",
+                status_code=response.status_code,
+                category="invalid_media",
+            )
+
+        upload_id = (response.json() or {}).get("id")
+        if not upload_id:
+            raise BufferApiError("bundle.social non ha restituito un id di upload.", category="invalid_media")
+
+        # Long enough to cover a campaign that spreads over hours, short enough
+        # that a re-run after the provider prunes old uploads re-uploads instead
+        # of referencing something gone.
+        cache.setex(key, self.UPLOAD_CACHE_TTL_SECONDS, upload_id)
+        return upload_id
+
     # -- publishing ---------------------------------------------------------
 
     def create_post(
@@ -314,6 +388,13 @@ class ProductionBundleSocialClient(BaseBufferClient):
         post_date = scheduled_at or datetime.now(timezone.utc)
 
         platform_data: Dict[str, Any] = {"text": text}
+
+        # Instagram and TikTok reject a post with no media outright ("At least 1
+        # upload(s) required", observed from the live API), and Facebook accepts
+        # text alone. Attach whatever the campaign carries; campaign_resolver
+        # excludes the channels that cannot work before we get here.
+        if media_url:
+            platform_data["uploadIds"] = [self.ensure_upload(api_key, media_url)]
 
         if bundle_type == "YOUTUBE":
             # YouTube needs a real title; falling back to the text would produce

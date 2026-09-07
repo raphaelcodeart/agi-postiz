@@ -337,6 +337,44 @@ class CampaignResolver:
             f"non sono influenzati."
         )
 
+
+    # Platforms that cannot publish a post without media, and what they accept.
+    # Observed directly from the provider's own rejections ("At least 1
+    # upload(s) required", "Tiktok video must have only videos"), not from a
+    # documentation page - these are the errors a real campaign would hit.
+    MEDIA_REQUIRED_PLATFORMS = {"instagram", "tiktok"}
+    VIDEO_ONLY_PLATFORMS = {"tiktok"}
+
+    @classmethod
+    def compute_media_validation_error(
+        cls, platform: str, media_file: Optional[MediaFile]
+    ) -> Optional[str]:
+        """
+        Proactive check for platforms that refuse a post outright.
+
+        Same purpose as compute_video_duration_validation_error: catch it here,
+        where the administrator sees a readable reason next to the channel,
+        instead of letting every affected target burn an API call and come back
+        as a failed publication with a provider error string.
+        """
+        platform_key = platform.lower().strip()
+
+        if platform_key in cls.MEDIA_REQUIRED_PLATFORMS and media_file is None:
+            return (
+                f"{platform.title()} non accetta post senza immagine o video. "
+                f"Aggiungi un media alla campagna oppure escludi i canali {platform.title()}."
+            )
+
+        if platform_key in cls.VIDEO_ONLY_PLATFORMS and media_file is not None:
+            is_video = bool(media_file.mime_type) and "video" in media_file.mime_type
+            if not is_video:
+                return (
+                    "TikTok accetta solo video, non immagini. "
+                    "Usa un video oppure escludi i canali TikTok da questa campagna."
+                )
+
+        return None
+
     @staticmethod
     def compute_channel_type_validation_error(platform: str, channel_type: Optional[str]) -> Optional[str]:
         """
@@ -482,6 +520,9 @@ class CampaignResolver:
                     f"Testo di {len(resolved_text)} caratteri supera il limite di {text_limit} "
                     f"per {chan.platform}. Imposta un testo specifico per questa piattaforma piu breve."
                 )
+
+            if validation_error is None:
+                validation_error = cls.compute_media_validation_error(chan.platform, campaign.media_file)
 
             if validation_error is None:
                 validation_error = cls.compute_video_duration_validation_error(
