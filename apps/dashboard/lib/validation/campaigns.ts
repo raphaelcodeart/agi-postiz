@@ -46,6 +46,12 @@ export const REFERRAL_LINK_RESERVED_CHARS = 60;
 // the backend's PLATFORM_TEXT_LIMITS check on the resolved text at launch.
 export const PERSONAL_CONTACTS_RESERVED_CHARS = 100;
 
+// Same idea again, for "Includi dichiarazione affiliazione". Sized on the SHORT
+// wording, because the short form is exactly what gets appended on the platforms
+// whose limits make this matter (X, Threads). Mirrors
+// AFFILIATE_DISCLOSURE_RESERVED_CHARS in apps/api/app/integrations/openai/client.py.
+export const AFFILIATE_DISCLOSURE_RESERVED_CHARS = 30;
+
 export const campaignWizardSchema = z
   .object({
     // Step 1 - Info
@@ -63,6 +69,7 @@ export const campaignWizardSchema = z
     threads_text: z.string().max(500).optional().or(z.literal("")),
     include_referral_link: z.boolean(),
     include_personal_contacts: z.boolean(),
+    include_affiliate_disclosure: z.boolean(),
 
     // Step 3 - Media
     media_file_id: z.string().optional().nullable(),
@@ -86,7 +93,8 @@ export const campaignWizardSchema = z
   .superRefine((data, ctx) => {
     const reservedChars =
       (data.include_referral_link ? REFERRAL_LINK_RESERVED_CHARS : 0) +
-      (data.include_personal_contacts ? PERSONAL_CONTACTS_RESERVED_CHARS : 0);
+      (data.include_personal_contacts ? PERSONAL_CONTACTS_RESERVED_CHARS : 0) +
+      (data.include_affiliate_disclosure ? AFFILIATE_DISCLOSURE_RESERVED_CHARS : 0);
     if (reservedChars > 0) {
       const toggledLabel =
         data.include_referral_link && data.include_personal_contacts
@@ -147,7 +155,7 @@ export type CampaignWizardValues = z.infer<typeof campaignWizardSchema>;
 
 export const WIZARD_STEP_FIELDS: (keyof CampaignWizardValues)[][] = [
   ["title"],
-  ["default_text", "x_text", "threads_text", "include_referral_link", "include_personal_contacts"],
+  ["default_text", "x_text", "threads_text", "include_referral_link", "include_personal_contacts", "include_affiliate_disclosure"],
   ["media_file_id"],
   ["targeting_mode", "user_ids", "group_ids", "channel_ids", "platform_names"],
   ["publishing_mode", "scheduled_at", "timezone"],
@@ -177,6 +185,7 @@ export function toCampaignCreatePayload(values: CampaignWizardValues): CampaignC
     threads_text: values.threads_text || null,
     include_referral_link: values.include_referral_link,
     include_personal_contacts: values.include_personal_contacts,
+    include_affiliate_disclosure: values.include_affiliate_disclosure,
     media_file_id: values.media_file_id || null,
     article_id: values.article_id || null,
     publishing_mode: values.publishing_mode,
@@ -208,6 +217,7 @@ export function campaignToWizardDefaults(campaign: CampaignResponse): Partial<Ca
     threads_text: campaign.threads_text ?? "",
     include_referral_link: campaign.include_referral_link,
     include_personal_contacts: campaign.include_personal_contacts,
+    include_affiliate_disclosure: campaign.include_affiliate_disclosure ?? false,
     media_file_id: campaign.media_file_id,
     targeting_mode: campaign.targeting_mode,
     user_ids: asStringArray(params.user_ids),

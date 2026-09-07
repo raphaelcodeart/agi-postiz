@@ -8,6 +8,7 @@ from app.models.campaign import Campaign, CampaignTarget
 from app.models.publication import Publication, PublicationAttempt
 from app.models.audit import AuditLog
 from app.models.ai_settings import AISettings
+from app.models.platform_settings import PlatformSettings
 
 __all__ = [
     "Base",
@@ -28,4 +29,5 @@ __all__ = [
     "PublicationAttempt",
     "AuditLog",
     "AISettings",
+    "PlatformSettings",
 ]

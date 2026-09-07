@@ -221,6 +221,7 @@ class AIGenerateTextRequest(BaseModel):
     # Same idea as include_referral_link above, but for the "Includi contatti
     # personali" checkbox (see openai/client.py PERSONAL_CONTACTS_RESERVED_CHARS).
     include_personal_contacts: bool = False
+    include_affiliate_disclosure: bool = False
 
 
 class AIGenerateTextResponse(BaseModel):
@@ -266,6 +267,7 @@ class CampaignCreate(BaseModel):
     # owning user's personal_contacts signature block, appended right after
     # the referral link (see campaign_resolver.py).
     include_personal_contacts: bool = False
+    include_affiliate_disclosure: bool = False
 
 class CampaignResponse(BaseModel):
     id: uuid.UUID
@@ -285,6 +287,7 @@ class CampaignResponse(BaseModel):
     targeting_mode: str
     include_referral_link: bool = False
     include_personal_contacts: bool = False
+    include_affiliate_disclosure: bool = False
     # Targeting params used at launch (e.g. {"channel_ids": [...]}), needed to
     # reproduce the same recipient selection when duplicating a campaign.
     metadata_json: Optional[Dict[str, Any]] = None

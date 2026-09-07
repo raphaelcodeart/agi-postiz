@@ -26,3 +26,4 @@ from app.models.omnichannel import (  # noqa
     OmniAIUsage,
 )
 from app.models.statistics import StatSyncRun, StatPostMetric, StatMetricHistory  # noqa
+from app.models.platform_settings import PlatformSettings  # noqa

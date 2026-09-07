@@ -182,6 +182,7 @@ export const mockCampaigns: CampaignResponse[] = [
     targeting_mode: "all_active_channels",
     include_referral_link: false,
     include_personal_contacts: false,
+    include_affiliate_disclosure: false,
     status: "completed",
     media_file_id: "med-1",
     media_file: mockMedia.find((m) => m.id === "med-1") ?? null,

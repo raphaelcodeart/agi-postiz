@@ -139,6 +139,28 @@ class CampaignResolver:
 
         return query.all()
 
+
+    @staticmethod
+    def _affiliate_disclosure_texts(db: Session) -> tuple:
+        """
+        The configured disclosure wording, long and short.
+
+        Falls back to the built-in defaults when an administrator has not set
+        anything yet, so switching the option on always produces a usable
+        disclosure rather than silently appending nothing - which would be the
+        worst outcome: the campaign would look compliant and not be.
+        """
+        from app.models.platform_settings import (
+            DEFAULT_AFFILIATE_DISCLOSURE,
+            DEFAULT_AFFILIATE_DISCLOSURE_SHORT,
+            PlatformSettings,
+        )
+
+        settings_row = db.query(PlatformSettings).first()
+        long_text = (settings_row.affiliate_disclosure_text if settings_row else None) or DEFAULT_AFFILIATE_DISCLOSURE
+        short_text = (settings_row.affiliate_disclosure_text_short if settings_row else None) or DEFAULT_AFFILIATE_DISCLOSURE_SHORT
+        return long_text, short_text
+
     @staticmethod
     def resolve_text_for_channel(
         campaign: Campaign,
@@ -146,6 +168,7 @@ class CampaignResolver:
         channel_override_text: str = None,
         referral_link: Optional[str] = None,
         personal_contacts: Optional[str] = None,
+        affiliate_disclosure: Optional[str] = None,
     ) -> str:
         """
         Text resolution order of priority:
@@ -168,7 +191,13 @@ class CampaignResolver:
         promoter link first, then their personal contacts, matching how the two
         "Includi ..." checkboxes are ordered in the campaign wizard.
 
-        Both are deliberately the *last* steps: PLATFORM_TEXT_LIMITS validation
+        Then, if campaign.include_affiliate_disclosure is on: appends the
+        caller-supplied disclosure wording. Required whenever the post carries an
+        affiliate link - the promoter earns a commission, which makes it
+        commercial communication whether or not anyone pays them directly. The
+        caller passes the short form on platforms with a tight character budget.
+
+        All three are deliberately the *last* steps: PLATFORM_TEXT_LIMITS validation
         in launch_campaign runs on the value this returns, so appended text that
         pushes a target over its platform's character limit is caught the same
         way an over-limit plain text already is today.
@@ -203,6 +232,17 @@ class CampaignResolver:
 
         if campaign.include_personal_contacts and personal_contacts:
             text = f"{text}\n\n{personal_contacts}"
+
+        # Advertising disclosure, last of the three appends. Deliberately after
+        # the referral link so it sits next to the thing it is declaring, which
+        # is what makes it readable rather than a footnote: on Instagram and
+        # TikTok anything far down the caption disappears behind "... more".
+        # getattr with a default, not a bare attribute access: this method is
+        # called with anything campaign-shaped - including objects built before
+        # the field existed - and a missing flag must mean "off", not a crash
+        # that takes the whole campaign launch down.
+        if getattr(campaign, "include_affiliate_disclosure", False) and affiliate_disclosure:
+            text = f"{text}\n\n{affiliate_disclosure}"
 
         return text
 
@@ -335,6 +375,13 @@ class CampaignResolver:
 
         publications_created = []
 
+        # Disclosure wording resolved once for the whole campaign, not per
+        # channel: it is a platform-wide setting, and reading it inside the loop
+        # would be one query per target.
+        disclosure_long = disclosure_short = None
+        if getattr(campaign, "include_affiliate_disclosure", False):
+            disclosure_long, disclosure_short = cls._affiliate_disclosure_texts(db)
+
         # 3. Create CampaignTargets & Publications
         # We wrap in sub-transactions/flushes for atomicity
         for chan in channels:
@@ -346,8 +393,16 @@ class CampaignResolver:
             # can never leak across users even when a campaign targets channels
             # from many users at once.
             override_text = channel_overrides.get(str(chan.id))
+            # Short disclosure where the character budget is tight (X allows 280,
+            # and the full sentence would eat a fifth of the post).
+            platform_key = chan.platform.lower().strip()
+            disclosure = disclosure_long
+            if disclosure_long and PLATFORM_TEXT_LIMITS.get(platform_key, 10_000) <= 500:
+                disclosure = disclosure_short
+
             resolved_text = cls.resolve_text_for_channel(
-                campaign, chan, override_text, conn.user.referral_link, conn.user.personal_contacts
+                campaign, chan, override_text, conn.user.referral_link,
+                conn.user.personal_contacts, disclosure,
             )
 
             # Catch platform text-length violations here instead of letting them reach

@@ -17,6 +17,7 @@ import {
   PLATFORM_HARD_LIMITS,
   REFERRAL_LINK_RESERVED_CHARS,
   PERSONAL_CONTACTS_RESERVED_CHARS,
+  AFFILIATE_DISCLOSURE_RESERVED_CHARS,
 } from "@/lib/validation/campaigns";
 import { AIGenerateDialog } from "./ai-generate-dialog";
 import type { AIGenerateTextResponse } from "@/types/api";
@@ -33,9 +34,11 @@ const PLATFORM_TABS: { value: keyof CampaignWizardValues; label: string; maxLeng
 export function StepText({ form }: { form: UseFormReturn<CampaignWizardValues> }) {
   const includeReferralLink = form.watch("include_referral_link");
   const includePersonalContacts = form.watch("include_personal_contacts");
+  const includeAffiliateDisclosure = form.watch("include_affiliate_disclosure");
   const reservedChars =
     (includeReferralLink ? REFERRAL_LINK_RESERVED_CHARS : 0) +
-    (includePersonalContacts ? PERSONAL_CONTACTS_RESERVED_CHARS : 0);
+    (includePersonalContacts ? PERSONAL_CONTACTS_RESERVED_CHARS : 0) +
+    (includeAffiliateDisclosure ? AFFILIATE_DISCLOSURE_RESERVED_CHARS : 0);
   function handleGenerated(result: AIGenerateTextResponse) {
     form.setValue("default_text", result.default_text, { shouldDirty: true, shouldValidate: true });
     form.setValue("instagram_text", result.instagram_text, { shouldDirty: true, shouldValidate: true });
@@ -155,6 +158,55 @@ export function StepText({ form }: { form: UseFormReturn<CampaignWizardValues> }
                   solo il suo, mai quello di altri. Chi non ha contatti configurati riceve il testo invariato,
                   esattamente come con questa opzione spenta. I box con un limite reale (X, Threads) si riducono
                   di altri {PERSONAL_CONTACTS_RESERVED_CHARS} caratteri per lasciare sempre spazio al blocco.
+                </FormDescription>
+              </span>
+            </label>
+          </FormItem>
+        )}
+      />
+
+
+      <FormField
+        control={form.control}
+        name="include_affiliate_disclosure"
+        render={({ field }) => (
+          <FormItem>
+            <label className="flex items-start gap-2 rounded-md border p-3">
+              <FormControl>
+                <Checkbox
+                  checked={field.value}
+                  onCheckedChange={(checked) => {
+                    field.onChange(checked);
+                    if (!checked) return;
+                    // Same immediate-warning pattern as the two checkboxes above.
+                    const otherReserved =
+                      (includeReferralLink ? REFERRAL_LINK_RESERVED_CHARS : 0) +
+                      (includePersonalContacts ? PERSONAL_CONTACTS_RESERVED_CHARS : 0) +
+    (includeAffiliateDisclosure ? AFFILIATE_DISCLOSURE_RESERVED_CHARS : 0);
+                    const overLimit = (["x_text", "threads_text"] as const).filter((f) => {
+                      const limit = PLATFORM_HARD_LIMITS[f] - otherReserved - AFFILIATE_DISCLOSURE_RESERVED_CHARS;
+                      return (form.getValues(f) ?? "").length > limit;
+                    });
+                    if (overLimit.length > 0) {
+                      const labels = overLimit.map((f) => (f === "x_text" ? "X" : "Threads")).join(" e ");
+                      toast.warning(`Il testo per ${labels} è già troppo lungo per lasciare spazio alla dichiarazione - riducilo prima di continuare.`);
+                      form.trigger(overLimit);
+                    }
+                  }}
+                  className="mt-0.5"
+                />
+              </FormControl>
+              <span>
+                <span className="block text-sm font-medium text-foreground">
+                  Includi dichiarazione affiliazione
+                </span>
+                <FormDescription>
+                  Aggiunge in fondo a ogni post la dicitura che segnala la natura promozionale del
+                  contenuto. Serve quando il post contiene un link di affiliazione: il promoter
+                  guadagna una commissione, quindi è comunicazione commerciale e va dichiarata anche
+                  se non lo paghi direttamente. Il testo si modifica una volta per tutte dalla pagina
+                  Impostazioni. I box con un limite reale (X, Threads) usano la versione breve e si
+                  riducono di {AFFILIATE_DISCLOSURE_RESERVED_CHARS} caratteri.
                 </FormDescription>
               </span>
             </label>

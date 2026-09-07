@@ -189,6 +189,7 @@ export interface CampaignCreatePayload {
   targeting_params: Record<string, unknown>;
   include_referral_link: boolean;
   include_personal_contacts: boolean;
+  include_affiliate_disclosure: boolean;
 }
 
 export interface CampaignResponse {
@@ -209,6 +210,7 @@ export interface CampaignResponse {
   targeting_mode: TargetingMode;
   include_referral_link: boolean;
   include_personal_contacts: boolean;
+  include_affiliate_disclosure: boolean;
   metadata_json?: Record<string, unknown> | null;
   status: CampaignStatus;
   media_file_id: string | null;

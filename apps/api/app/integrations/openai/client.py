@@ -79,6 +79,12 @@ REFERRAL_LINK_RESERVED_CHARS = 60
 # campaign_resolver.py's PLATFORM_TEXT_LIMITS check on the resolved text).
 PERSONAL_CONTACTS_RESERVED_CHARS = 100
 
+# Same idea again, for the "Includi dichiarazione affiliazione" checkbox. Sized
+# on the SHORT wording, because the short form is what gets appended precisely on
+# the platforms whose limits make this matter (X, Threads) - reserving the length
+# of the full sentence there would shrink the generated text for nothing.
+AFFILIATE_DISCLOSURE_RESERVED_CHARS = 30
+
 SYSTEM_PROMPT = """Sei un social media copywriter. Dato un argomento in italiano, scrivi contenuti pronti per essere pubblicati su più piattaforme social, nella stessa lingua della richiesta dell'utente.
 
 Rispondi SOLO con un oggetto JSON con esattamente queste chiavi, tutte stringhe:
@@ -115,6 +121,7 @@ def generate_campaign_text(
     topic: str,
     include_referral_link: bool = False,
     include_personal_contacts: bool = False,
+    include_affiliate_disclosure: bool = False,
 ) -> Dict[str, str]:
     """
     Calls OpenAI's Chat Completions API to draft campaign copy for every
@@ -134,6 +141,8 @@ def generate_campaign_text(
     reserved_chars = 0
     if include_referral_link:
         reserved_chars += REFERRAL_LINK_RESERVED_CHARS
+    if include_affiliate_disclosure:
+        reserved_chars += AFFILIATE_DISCLOSURE_RESERVED_CHARS
     if include_personal_contacts:
         reserved_chars += PERSONAL_CONTACTS_RESERVED_CHARS
     if reserved_chars:
@@ -150,6 +159,8 @@ def generate_campaign_text(
             "personale in fondo (circa 60 caratteri in più) - i target sopra per x_text e threads_text "
             "sono già ridotti per lasciare spazio a questo link: non aggiungerlo tu stesso nel testo."
         )
+    if include_affiliate_disclosure:
+        reserved_chars += AFFILIATE_DISCLOSURE_RESERVED_CHARS
     if include_personal_contacts:
         system_prompt += (
             "\n\nA ogni testo generato verrà anche aggiunto automaticamente, in fondo (dopo l'eventuale "

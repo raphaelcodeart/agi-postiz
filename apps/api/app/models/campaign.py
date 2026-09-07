@@ -46,6 +46,14 @@ class Campaign(Base):
     # referral link (see resolve_text_for_channel) - a signature-style block of
     # text (name, phone, etc.) rather than a single URL.
     include_personal_contacts: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Off by default, same mechanics as the two above. Appends the advertising
+    # disclosure required when a post carries an affiliate link: the promoter
+    # earns a commission, which makes it commercial communication regardless of
+    # whether the platform pays them directly. Put on the campaign rather than
+    # left to each promoter because the text is written here - with hundreds of
+    # collaborators, relying on each of them remembering is not a control.
+    # The wording itself is configurable (platform_settings), not hardcoded.
+    include_affiliate_disclosure: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Targeting params matching targeting_mode (e.g. user_ids/group_ids/channel_ids),
     # persisted so poll_and_queue_scheduled_publications can re-launch a scheduled
     # campaign with the same selection later.

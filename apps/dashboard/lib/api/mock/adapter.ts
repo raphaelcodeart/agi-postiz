@@ -323,6 +323,7 @@ export function createCampaign(payload: CampaignCreatePayload): Promise<Campaign
     targeting_mode: payload.targeting_mode,
     include_referral_link: payload.include_referral_link,
     include_personal_contacts: payload.include_personal_contacts,
+    include_affiliate_disclosure: payload.include_affiliate_disclosure ?? false,
     status: "draft",
     media_file_id: payload.media_file_id ?? null,
     media_file: payload.media_file_id ? (mockMedia.find((m) => m.id === payload.media_file_id) ?? null) : null,
