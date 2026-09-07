@@ -186,7 +186,7 @@ def test_metrics_map_onto_the_keys_the_statistics_module_stores(monkeypatch):
     """
     client = _client()
     monkeypatch.setattr(client, "_request", lambda *a, **k: {
-        "post": {"externalLink": "https://instagram.com/p/xyz"},
+        "post": {"externalData": {"INSTAGRAM": {"permalink": "https://instagram.com/p/xyz"}}},
         "items": [
             {"likes": 1, "comments": 1, "shares": 1, "views": 1, "impressions": 1, "impressionsUnique": 1},
             {
@@ -198,7 +198,7 @@ def test_metrics_map_onto_the_keys_the_statistics_module_stores(monkeypatch):
     })
 
     result = client.get_post_metrics("k", "post_1")
-    metrics = {m["name"]: m["value"] for m in result["metrics"]}
+    metrics = {m["type"]: m["value"] for m in result["metrics"]}
 
     # Latest snapshot wins - the API appends a row per refresh.
     assert metrics["likes"] == 120
@@ -221,3 +221,60 @@ def test_metrics_absent_yet_returns_an_empty_result(monkeypatch):
     monkeypatch.setattr(client, "_request", lambda *a, **k: {"items": []})
     result = client.get_post_metrics("k", "post_1")
     assert result["metrics"] == []
+
+
+# --- contract with the statistics module -------------------------------------
+
+def test_metrics_use_the_key_the_statistics_module_indexes_by():
+    """
+    The silent-failure guard.
+
+    extract_metric_columns looks metrics up by m["type"]. Emitting them under
+    any other key drops every single one without raising: the sync reports
+    success, the dashboard shows zeros, and nothing says why. This was actually
+    wrong once - the client emitted "name" - and only reading the consumer
+    caught it.
+    """
+    from app.services.statistics_service import METRIC_TYPE_TO_COLUMN, extract_metric_columns
+
+    client = _client()
+    import types as _t
+    client._request = _t.MethodType(  # type: ignore[method-assign]
+        lambda self, *a, **k: {
+            "items": [{
+                "likes": 10, "comments": 2, "shares": 1,
+                "views": 100, "impressions": 120, "impressionsUnique": 90,
+            }]
+        },
+        client,
+    )
+
+    result = client.get_post_metrics("k", "p1")
+
+    # Every emitted type must be one the statistics module actually knows...
+    for metric in result["metrics"]:
+        assert "type" in metric, "la chiave deve essere 'type', non 'name'"
+        assert metric["type"] in METRIC_TYPE_TO_COLUMN, f"tipo sconosciuto: {metric['type']}"
+
+    # ...and must survive the real extraction, not just look right.
+    columns = extract_metric_columns(result["metrics"])
+    assert columns["likes"] == 10
+    assert columns["impressions"] == 120
+    assert columns["reach"] == 90
+    assert columns["views"] == 100
+
+
+def test_permalink_is_read_from_external_data():
+    """
+    The public post URL lives at externalData.<PLATFORM>.permalink, not at a
+    top-level field. Getting this wrong costs nothing loudly - the link simply
+    never appears in the dashboard.
+    """
+    post = {"externalData": {"FACEBOOK": {"permalink": "https://facebook.com/123/posts/456"}}}
+    assert ProductionBundleSocialClient._permalink_from(post) == "https://facebook.com/123/posts/456"
+
+
+def test_permalink_absent_returns_none_without_raising():
+    assert ProductionBundleSocialClient._permalink_from({}) is None
+    assert ProductionBundleSocialClient._permalink_from({"externalData": {}}) is None
+    assert ProductionBundleSocialClient._permalink_from({"externalData": {"X": {}}}) is None

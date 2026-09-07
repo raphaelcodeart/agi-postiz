@@ -375,6 +375,7 @@ class ProductionBundleSocialClient(BaseBufferClient):
         Field parity, verified against the live schema:
           likes, comments, shares, views, impressions -> direct
           reach            <- impressionsUnique (unique impressions IS reach)
+        Emitted under the "type" key that the statistics module indexes by.
           saves            -> kept in metrics_raw, no dedicated column
           clicks, follows, engagement_rate -> NOT PROVIDED by bundle.social;
             those columns stay null for channels of this provider rather than
@@ -404,18 +405,42 @@ class ProductionBundleSocialClient(BaseBufferClient):
             "reach": latest.get("impressionsUnique"),
         }
 
+        # The key is "type", NOT "name": extract_metric_columns in
+        # services/statistics_service.py looks up METRIC_TYPE_TO_COLUMN by
+        # m["type"], and a metric under any other key is silently dropped. That
+        # failure mode is the dangerous one - the sync reports success, the
+        # dashboard shows zeros, and nothing anywhere says why.
         metrics = [
-            {"name": name, "value": value}
-            for name, value in mapping.items()
+            {"type": metric_type, "value": value}
+            for metric_type, value in mapping.items()
             if value is not None
         ]
-
-        post = result.get("post") or {}
 
         return {
             "metrics": metrics,
             "metrics_updated_at": latest.get("updatedAt"),
-            "external_link": post.get("externalLink"),
+            "external_link": self._permalink_from(result.get("post") or {}),
             "raw": latest,
             "provider": "bundle_social",
         }
+
+    @staticmethod
+    def _permalink_from(post: Dict[str, Any]) -> Optional[str]:
+        """
+        The published post's public URL on the social network.
+
+        Lives at ``externalData.<PLATFORM>.permalink``, keyed by platform - not
+        at a top-level field. Each of our publications targets exactly one
+        platform, so the first permalink present is the right one; iterating
+        avoids having to thread the platform down into this call just to index
+        a single-entry object.
+        """
+        external_data = post.get("externalData") or {}
+        if not isinstance(external_data, dict):
+            return None
+        for platform_payload in external_data.values():
+            if isinstance(platform_payload, dict):
+                permalink = platform_payload.get("permalink")
+                if permalink:
+                    return permalink
+        return None
