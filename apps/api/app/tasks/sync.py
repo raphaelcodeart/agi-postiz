@@ -203,6 +203,11 @@ def sync_buffer_connection(connection_id_str: str) -> None:
                         if existing_chan.duplicate_of_channel_id is not None:
                             existing_chan.is_active = False
                             existing_chan.publication_mode = "disabled"
+                        # Removed by the user: upstream still reports it as
+                        # connected, so without this every sync would bring it
+                        # back into their list.
+                        if existing_chan.deleted_at is not None:
+                            existing_chan.is_active = False
                         chan = existing_chan
                     else:
                         chan = SocialChannel(

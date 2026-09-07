@@ -104,6 +104,13 @@ class SocialChannel(Base):
     publication_mode: Mapped[str] = mapped_column(String(50), default="automatic", nullable=False) # automatic, notification, approval, disabled
     last_sync_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     raw_metadata: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    # Soft delete: the user removed this channel from their list. NOT a row
+    # delete - campaign_targets, publications and stat_post_metrics all cascade
+    # from here, so removing the row would erase the record of what was actually
+    # published on a client's real profile. Postgres is the source of truth
+    # (AGENTS.md rule 4); the history stays, the channel just disappears from
+    # the user's view and can never be targeted again.
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
@@ -112,6 +119,7 @@ class SocialChannel(Base):
         # alongside is_active/publication_mode.
         Index("idx_social_channels_provider", "provider"),
         Index("idx_social_channels_duplicate_of", "duplicate_of_channel_id"),
+        Index("idx_social_channels_deleted_at", "deleted_at"),
     )
 
     # Relationships

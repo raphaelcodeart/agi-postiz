@@ -94,6 +94,10 @@ class CampaignResolver:
             User.deleted_at.is_(None),
             BufferConnection.status == "connected",
             SocialChannel.is_active.is_(True),
+            # Removed by its owner: never targetable again, whatever a later
+            # sync says about it upstream. Same soft-delete rule already applied
+            # to User above.
+            SocialChannel.deleted_at.is_(None),
             SocialChannel.publication_mode != "disabled"
         )
 

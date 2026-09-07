@@ -16,6 +16,7 @@ Two rules hold everywhere in this file:
 2. Nothing here exposes a credential, not even indirectly - no API keys, no
    encrypted blobs, no provider tokens (AGENTS.md rules 8-10).
 """
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -94,6 +95,9 @@ class PortalChannelResponse(BaseModel):
     # channel they connected sitting there switched off with no reason given,
     # and reasonably assumes something is broken.
     blocked_reason: Optional[str] = None
+    # True when the channel is no longer connected upstream and can therefore be
+    # removed from the list without touching anything that still works.
+    can_remove: bool = False
 
 
 class PortalCampaignResponse(BaseModel):
@@ -275,7 +279,10 @@ def _user_channels_query(db: Session, user: User):
         db.query(SocialChannel)
         .join(BufferOrganization, SocialChannel.buffer_organization_id == BufferOrganization.id)
         .join(BufferConnection, BufferOrganization.buffer_connection_id == BufferConnection.id)
-        .filter(BufferConnection.user_id == user.id)
+        .filter(
+            BufferConnection.user_id == user.id,
+            SocialChannel.deleted_at.is_(None),
+        )
     )
 
 
@@ -305,6 +312,7 @@ def list_my_channels(
                 if c.duplicate_of_channel_id is not None
                 else None
             ),
+            can_remove=not c.is_active,
         )
         for c in channels
     ]
@@ -567,6 +575,12 @@ def create_connect_link(
     return ConnectLinkResponse(url=url)
 
 
+# How long a sync stays "fresh enough" for the automatic pass on page load.
+# Short enough that the list is effectively live, long enough that opening the
+# page repeatedly does not hammer the provider.
+SYNC_MIN_INTERVAL_SECONDS = 30
+
+
 class ConnectSyncResponse(BaseModel):
     channels: int
     message: str
@@ -574,6 +588,7 @@ class ConnectSyncResponse(BaseModel):
 
 @router.post("/connect/sync", response_model=ConnectSyncResponse)
 def sync_my_channels(
+    force: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_portal_user),
 ):
@@ -596,6 +611,19 @@ def sync_my_channels(
 
     if not connection or not connection.provider_account_ref:
         return ConnectSyncResponse(channels=0, message="Nessun collegamento da sincronizzare.")
+
+    # Freshness guard for the automatic pass. Opening the channels page triggers
+    # a sync so the list is never stale, but without this every page view - and
+    # every back-navigation to it - would be an upstream call. A user returning
+    # from the connect flow is the case that must NOT be throttled, so an
+    # explicit refresh always goes through.
+    if not force and connection.last_sync_at is not None:
+        age = (datetime.now(timezone.utc) - connection.last_sync_at).total_seconds()
+        if age < SYNC_MIN_INTERVAL_SECONDS:
+            count = _user_channels_query(db, current_user).filter(
+                SocialChannel.provider == PROVIDER_BUNDLE_SOCIAL
+            ).count()
+            return ConnectSyncResponse(channels=count, message="Già aggiornato.")
 
     from app.tasks.sync import sync_buffer_connection
 
@@ -696,3 +724,47 @@ def get_my_overview(
     ]
 
     return PortalOverviewResponse(stats=stats, timeline=timeline, top_channels=top_channels)
+
+
+@router.delete("/channels/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_my_channel(
+    channel_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_portal_user),
+):
+    """
+    Remove a channel the user no longer uses from their list.
+
+    A SOFT delete, not a row delete. campaign_targets, publications and
+    stat_post_metrics all cascade from social_channels, so dropping the row would
+    erase the record of everything ever published on that client's real profile
+    - and Postgres is the source of truth for exactly that (AGENTS.md rule 4).
+    The history stays; the channel leaves the user's view and can never be
+    targeted by a campaign again.
+
+    Only offered for channels already disconnected upstream. Removing one that is
+    still connected would be a lie: the provider would keep it, the next sync
+    would find it, and the user would watch a channel they "deleted" come back.
+    To get rid of a live channel, disconnect it at the social network first.
+    """
+    channel = _user_channels_query(db, current_user).filter(
+        SocialChannel.id == channel_id
+    ).first()
+
+    if not channel:
+        # Same answer whether it does not exist or belongs to someone else: this
+        # endpoint must not confirm the existence of another user's channels.
+        raise HTTPException(status_code=404, detail="Canale non trovato.")
+
+    if channel.is_active:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Questo canale risulta ancora collegato. Scollegalo prima dal social, "
+                "poi aggiorna la pagina e potrai rimuoverlo."
+            ),
+        )
+
+    channel.deleted_at = datetime.now(timezone.utc)
+    channel.publication_mode = "disabled"
+    db.commit()

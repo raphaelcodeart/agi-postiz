@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { PlatformIcon } from "@/components/shared/platform-badge";
 import { portalFetch, type PortalChannel, type PortalUser } from "@/lib/portal/server";
 import { ConnectChannelPanel } from "./connect-panel";
+import { RemoveChannelButton } from "./remove-channel-button";
 
 export const dynamic = "force-dynamic";
 
@@ -69,6 +70,10 @@ export default async function PortalChannelsPage() {
                     <p className="w-full text-sm text-amber-700 dark:text-amber-400">
                       {channel.blocked_reason}
                     </p>
+                  )}
+
+                  {channel.can_remove && (
+                    <RemoveChannelButton channelId={channel.id} channelName={channel.name} />
                   )}
 
                   {channel.external_link && (

@@ -40,6 +40,8 @@ export type PortalChannel = {
   last_sync_at: string | null;
   /** Why an inactive channel is inactive - e.g. already connected elsewhere. */
   blocked_reason: string | null;
+  /** True once the channel is no longer connected upstream and can be removed. */
+  can_remove: boolean;
 };
 
 export type PortalCampaign = {

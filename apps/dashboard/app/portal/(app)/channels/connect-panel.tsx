@@ -63,7 +63,12 @@ export function ConnectChannelPanel() {
     async (silent: boolean) => {
       setSyncing(true);
       try {
-        const response = await fetch("/api/portal/backend/connect/sync", { method: "POST" });
+        // The automatic pass is throttled server-side (see SYNC_MIN_INTERVAL_SECONDS);
+        // an explicit refresh, and the return from the connect flow, bypass it.
+        const response = await fetch(
+          `/api/portal/backend/connect/sync${silent ? "" : "?force=true"}`,
+          { method: "POST" }
+        );
         const payload = await response.json().catch(() => null);
         if (!response.ok) {
           setMessage(errorMessage(payload, "Aggiornamento non riuscito."));
@@ -85,13 +90,26 @@ export function ConnectChannelPanel() {
   );
 
   // Same-tab fallback: the popup was blocked, so the flow navigated away and
-  // came back with the marker.
+  // came back with the marker. Forced, because a user who has just authorised
+  // must see the channel regardless of when the last sync ran.
   useEffect(() => {
     if (searchParams.get("connected") === "1") {
-      void sync(true);
+      void sync(false);
       router.replace("/portal/channels");
     }
   }, [searchParams, sync, router]);
+
+  // Opening the page refreshes the list, so what the user sees always reflects
+  // what is actually connected - including channels they disconnected from the
+  // social network itself, which nothing else would tell us about. Runs after
+  // the page has rendered, so it never delays the first paint, and the server
+  // skips it when a sync ran moments ago.
+  useEffect(() => {
+    if (searchParams.get("connected") === "1") return;
+    void sync(true);
+    // Intentionally on mount only: this is "refresh on open", not a poll.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Popup path: the callback page posts a message before closing itself. The
   // origin check matters - without it any site could open a window onto this
