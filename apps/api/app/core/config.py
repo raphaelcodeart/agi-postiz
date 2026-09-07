@@ -67,6 +67,16 @@ class Settings(BaseSettings):
     GLOBAL_CONCURRENCY_LIMIT: int = 5
     CONCURRENT_JOBS_PER_CONNECTION: int = 1
     PAUSE_BETWEEN_REQUESTS_SECONDS: int = 10
+    # Randomness added to the pause above. A request landing on exactly the same
+    # interval every time is itself a machine signature; a few seconds of jitter
+    # makes the cadence irregular at no cost.
+    PAUSE_JITTER_SECONDS: int = 5
+    # Minimum spacing between two posts on the SAME channel. This is the limit
+    # that protects a promoter's own account: what a platform sees is one
+    # profile's posting frequency, not our aggregate throughput. Set to 0 to
+    # disable (not recommended with a shared-quota provider, where nothing else
+    # would space out two campaigns hitting the same profile).
+    MIN_SECONDS_BETWEEN_POSTS_PER_CHANNEL: int = 900
     MAX_PUBLICATION_ATTEMPTS: int = 5
 
     # Retry sequence in seconds (comma-separated list parsed by property)

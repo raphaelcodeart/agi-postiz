@@ -1,6 +1,7 @@
+import random
 import time
 import uuid
-from typing import Union
+from typing import Optional, Union
 import redis
 from app.core.config import settings
 from app.integrations.providers import PROVIDER_BUNDLE_SOCIAL
@@ -68,6 +69,36 @@ class RateLimiter:
     def _get_last_req_key(self, scope: str) -> str:
         return f"publish:last_req:{scope}"
 
+    def _get_channel_last_post_key(self, channel_id: Scope) -> str:
+        return f"publish:last_post:channel:{channel_id}"
+
+    def channel_cooldown_remaining(self, channel_id: Scope) -> int:
+        """
+        Seconds before this specific channel may receive another post.
+
+        This is the guard that protects the promoter's own account, and it is
+        separate from the provider quota on purpose. The two answer different
+        questions:
+
+          provider scope -> "are we hammering the upstream API?"
+          channel        -> "is this one profile posting like a bot?"
+
+        A shared-quota provider makes the distinction essential: every channel
+        sits behind one provider scope, so without this nothing at all would stop
+        two campaigns from posting twice on the same profile seconds apart. What
+        a platform sees is per-account frequency, not our aggregate throughput.
+        """
+        minimum = settings.MIN_SECONDS_BETWEEN_POSTS_PER_CHANNEL
+        if minimum <= 0:
+            return 0
+
+        last_post = float(self.r.get(self._get_channel_last_post_key(channel_id)) or 0.0)
+        if last_post <= 0:
+            return 0
+
+        elapsed = time.time() - last_post
+        return max(0, int(minimum - elapsed))
+
     def pause_connection(self, scope: Scope, duration_seconds: int = 60) -> None:
         """
         Pauses a scope, typically triggered after receiving an HTTP 429.
@@ -90,7 +121,7 @@ class RateLimiter:
         ttl = self.r.ttl(key)
         return max(0, ttl) if ttl is not None else 0
 
-    def can_process(self, scope: Scope) -> bool:
+    def can_process(self, scope: Scope, channel_id: Optional[Scope] = None) -> bool:
         """
         Evaluate if a publication job can be immediately processed based on scope
         status, cooldown periods, and global concurrency.
@@ -111,15 +142,22 @@ class RateLimiter:
         if active_global >= self.global_concurrency:
             return False
 
-        # 4. Check cooldown time elapsed since last request
+        # 4. Check cooldown time elapsed since last request.
+        # Jittered: a request landing on exactly the same interval every time is
+        # itself a machine signature. A few seconds of randomness costs nothing
+        # and makes the cadence irregular, which is what organic traffic is.
         last_req = float(self.r.get(self._get_last_req_key(scope_key)) or 0.0)
-        time_since_last = time.time() - last_req
-        if time_since_last < self.pause_between_requests:
+        required = self.pause_between_requests + random.uniform(0, settings.PAUSE_JITTER_SECONDS)
+        if time.time() - last_req < required:
+            return False
+
+        # 5. Per-channel spacing, when a channel was named.
+        if channel_id is not None and self.channel_cooldown_remaining(channel_id) > 0:
             return False
 
         return True
 
-    def acquire_lock(self, scope: Scope) -> bool:
+    def acquire_lock(self, scope: Scope, channel_id: Optional[Scope] = None) -> bool:
         """
         Atomically checks limits and increments active counters if available.
         Uses Redis pipeline to achieve concurrency checks.
@@ -127,7 +165,7 @@ class RateLimiter:
         scope_key = self._normalize(scope)
 
         # We run a check before lock
-        if not self.can_process(scope_key):
+        if not self.can_process(scope_key, channel_id):
             return False
 
         # We atomically increment the counters
@@ -137,7 +175,7 @@ class RateLimiter:
         pipeline.execute()
         return True
 
-    def release_lock(self, scope: Scope) -> None:
+    def release_lock(self, scope: Scope, channel_id: Optional[Scope] = None) -> None:
         """
         Decrements active counters and updates the last request timestamp.
         """
@@ -154,7 +192,17 @@ class RateLimiter:
             pipeline.decr(self._get_active_global_key())
 
         # Set last request timestamp
-        pipeline.set(self._get_last_req_key(scope_key), str(time.time()))
+        now = str(time.time())
+        pipeline.set(self._get_last_req_key(scope_key), now)
+        if channel_id is not None:
+            # Recorded on release, not acquire: what matters is when the post
+            # actually went out. Kept a little beyond the window so a stale key
+            # cannot pin a channel forever if a worker dies mid-flight.
+            pipeline.setex(
+                self._get_channel_last_post_key(channel_id),
+                max(60, settings.MIN_SECONDS_BETWEEN_POSTS_PER_CHANNEL * 2),
+                now,
+            )
         pipeline.execute()
 
     def reset_all_counters(self) -> None:

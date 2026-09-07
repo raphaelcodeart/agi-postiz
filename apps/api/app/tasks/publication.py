@@ -81,12 +81,20 @@ def process_publication_task(self, publication_id_str: str) -> None:
 
         rate_scope = provider_ctx.rate_limit_scope
 
-        # Check rate limiter availability
-        if not rate_limiter.acquire_lock(rate_scope):
-            logger.info(f"Rate limit or concurrency cap hit for scope {rate_scope}. Re-queuing.")
-            # Reset to retry_wait with a small delay
+        # Check rate limiter availability, naming the channel so its own spacing
+        # is enforced alongside the provider quota.
+        if not rate_limiter.acquire_lock(rate_scope, channel_id=pub.social_channel_id):
+            # Re-queue past the actual obstacle instead of always 15s: a channel
+            # in its cooldown would otherwise be retried every 15 seconds for the
+            # whole window, burning worker slots that other publications need.
+            channel_wait = rate_limiter.channel_cooldown_remaining(pub.social_channel_id)
+            delay = max(15, channel_wait + random.randint(1, 10)) if channel_wait else 15
+            logger.info(
+                f"Rate limit hit for scope {rate_scope} (channel wait {channel_wait}s). "
+                f"Re-queuing in {delay}s."
+            )
             pub.status = "retry_wait"
-            pub.next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=15)
+            pub.next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
             db.commit()
             return
 
@@ -200,7 +208,7 @@ def process_publication_task(self, publication_id_str: str) -> None:
         db.add(attempt)
         
         # Release concurrency locks
-        rate_limiter.release_lock(rate_scope)
+        rate_limiter.release_lock(rate_scope, channel_id=pub.social_channel_id)
 
         # Update Publication attributes
         pub.attempt_count = attempt_number
