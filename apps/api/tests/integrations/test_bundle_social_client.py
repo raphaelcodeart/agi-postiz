@@ -297,7 +297,7 @@ def test_metrics_map_onto_the_keys_the_statistics_module_stores(monkeypatch):
         ],
     })
 
-    result = client.get_post_metrics("k", "post_1")
+    result = client.get_post_metrics("k", "post_1", platform="instagram")
     metrics = {m["type"]: m["value"] for m in result["metrics"]}
 
     # Latest snapshot wins - the API appends a row per refresh.
@@ -319,7 +319,7 @@ def test_metrics_absent_yet_returns_an_empty_result(monkeypatch):
     """Fresh posts have no analytics for hours; that is not an error."""
     client = _client()
     monkeypatch.setattr(client, "_request", lambda *a, **k: {"items": []})
-    result = client.get_post_metrics("k", "post_1")
+    result = client.get_post_metrics("k", "post_1", platform="instagram")
     assert result["metrics"] == []
 
 
@@ -349,7 +349,7 @@ def test_metrics_use_the_key_the_statistics_module_indexes_by():
         client,
     )
 
-    result = client.get_post_metrics("k", "p1")
+    result = client.get_post_metrics("k", "p1", platform="instagram")
 
     # Every emitted type must be one the statistics module actually knows...
     for metric in result["metrics"]:
@@ -362,6 +362,87 @@ def test_metrics_use_the_key_the_statistics_module_indexes_by():
     assert columns["impressions"] == 120
     assert columns["reach"] == 90
     assert columns["views"] == 100
+
+
+def test_metrics_send_the_platform_type_the_endpoint_requires(monkeypatch):
+    """
+    Regression test for the reason every statistic read zero.
+
+    ``platformType`` reads like an optional filter and is not: without it the
+    endpoint answers 400 Request Validation Error, the sync records a per-post
+    failure, and the dashboard fills with zeroes explaining nothing.
+    """
+    client = _client()
+    captured = {}
+
+    def fake_request(api_key, method, path, *, params=None, json_body=None):
+        captured["path"] = path
+        captured["params"] = params or {}
+        return {"items": []}
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    client.get_post_metrics("k", "post_1", platform="instagram")
+
+    assert captured["params"].get("platformType") == "INSTAGRAM"
+    assert captured["params"].get("postId") == "post_1"
+
+
+def test_metrics_without_a_platform_fail_before_the_call(monkeypatch):
+    """
+    Better a clear refusal here than a provider 400 recorded as a mystery
+    per-post sync error.
+    """
+    client = _client()
+    monkeypatch.setattr(client, "_request", lambda *a, **k: pytest.fail("non deve chiamare l'API"))
+
+    with pytest.raises(BufferApiError):
+        client.get_post_metrics("k", "post_1")
+
+
+def test_metrics_report_that_the_post_actually_went_live(monkeypatch):
+    """
+    The statistics sync is the only moment we ask the provider about a post it
+    already accepted, so it is where "scheduled" finally becomes "published".
+    Without these fields every publication stayed "scheduled" forever, with no
+    permalink and no publication date - which is what production looked like.
+    """
+    client = _client()
+    monkeypatch.setattr(client, "_request", lambda *a, **k: {
+        "post": {"status": "POSTED", "postedDate": "2026-09-09T14:06:23.932Z"},
+        "profilePost": {
+            "permalink": "https://www.instagram.com/reel/DdEb4Y1kbaq/",
+            "publishedAt": "2026-09-09T14:06:23.967Z",
+            "thumbnail": "https://example.test/thumb.jpg",
+        },
+        "items": [{"likes": 1, "views": 65, "impressions": 65, "impressionsUnique": 60}],
+    })
+
+    result = client.get_post_metrics("k", "post_1", platform="instagram")
+
+    assert result["post_status"] == "POSTED"
+    assert result["published_at"] == "2026-09-09T14:06:23.967Z"
+    assert result["external_link"] == "https://www.instagram.com/reel/DdEb4Y1kbaq/"
+    assert {m["type"]: m["value"] for m in result["metrics"]}["views"] == 65
+
+
+def test_publication_state_is_reported_even_with_no_metrics_yet(monkeypatch):
+    """
+    A post published minutes ago has an empty analytics list. The confirmation
+    that it went out must not be withheld until the numbers arrive - otherwise
+    a freshly published post stays "scheduled" for a day.
+    """
+    client = _client()
+    monkeypatch.setattr(client, "_request", lambda *a, **k: {
+        "post": {"status": "POSTED", "postedDate": "2026-09-09T14:06:23.932Z"},
+        "profilePost": {"permalink": "https://x.test/p/1"},
+        "items": [],
+    })
+
+    result = client.get_post_metrics("k", "post_1", platform="instagram")
+
+    assert result["metrics"] == []
+    assert result["post_status"] == "POSTED"
+    assert result["external_link"] == "https://x.test/p/1"
 
 
 def test_permalink_is_read_from_external_data():
@@ -420,3 +501,67 @@ def test_a_future_scheduled_date_is_preserved(monkeypatch):
 
     sent = datetime.fromisoformat(captured["postDate"].replace("Z", "+00:00"))
     assert abs((sent - future).total_seconds()) < 2
+
+
+def test_a_disconnected_channel_is_explained_when_fetching_metrics(monkeypatch):
+    """
+    Same treatment as the publishing path. Left raw, this reached the Errori page
+    as `{"statusCode":400,"message":"Team does not have a Tiktok account"}` -
+    accurate, and useless to whoever has to act on it.
+    """
+    client = _client()
+
+    def fake_request(*a, **k):
+        raise BufferApiError(
+            'Richiesta bundle.social rifiutata: {"statusCode":400,"message":"Team does not have a Tiktok account"}',
+            status_code=400,
+            category="validation_failed",
+        )
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    with pytest.raises(BufferApiError) as excinfo:
+        client.get_post_metrics("k", "p1", platform="tiktok")
+
+    assert excinfo.value.category == "channel_disconnected"
+    assert "ricollegarlo" in excinfo.value.message
+
+
+def test_a_post_that_never_went_out_is_explained(monkeypatch):
+    """
+    "Post doesn't have external ID for that platform" means the provider took the
+    post but it never reached the network - so there is nothing to measure. That
+    is a different problem from a broken connection, and says so.
+    """
+    client = _client()
+
+    def fake_request(*a, **k):
+        raise BufferApiError(
+            'Richiesta bundle.social rifiutata: {"statusCode":400,"message":"Post doesn\'t have external ID for that platform"}',
+            status_code=400,
+            category="validation_failed",
+        )
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    with pytest.raises(BufferApiError) as excinfo:
+        client.get_post_metrics("k", "p1", platform="twitter")
+
+    assert excinfo.value.category == "not_published"
+
+
+def test_an_unrecognised_error_is_left_alone(monkeypatch):
+    """Inventing an explanation for an error we have never seen is worse than
+    showing the raw one."""
+    client = _client()
+
+    def fake_request(*a, **k):
+        raise BufferApiError("Qualcosa di completamente nuovo", status_code=400, category="validation_failed")
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    with pytest.raises(BufferApiError) as excinfo:
+        client.get_post_metrics("k", "p1", platform="instagram")
+
+    assert excinfo.value.message == "Qualcosa di completamente nuovo"
+    assert excinfo.value.category == "validation_failed"

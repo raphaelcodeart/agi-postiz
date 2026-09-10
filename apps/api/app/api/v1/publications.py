@@ -177,7 +177,11 @@ def get_publication_metrics(
             raise BufferApiError("Connessione non disponibile", category="auth_error")
 
         provider_ctx = get_provider_context(connection)
-        result = provider_ctx.client.get_post_metrics(provider_ctx.api_key, pub.external_post_id)
+        result = provider_ctx.client.get_post_metrics(
+                provider_ctx.api_key,
+                pub.external_post_id,
+                platform=pub.social_channel.platform if pub.social_channel else None,
+            )
         entry.metrics = [PostMetricValue(**m) for m in result.get("metrics", [])]
         entry.metrics_updated_at = result.get("metrics_updated_at")
 

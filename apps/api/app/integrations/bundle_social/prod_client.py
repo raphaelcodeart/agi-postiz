@@ -559,16 +559,31 @@ class ProductionBundleSocialClient(BaseBufferClient):
         explanation for an error we have not seen would be worse than the dump.
         """
         raw = error.message or ""
-        if "No social accounts selected" in raw:
+
+        # Keyed on the provider's own wording, which is the only stable handle we
+        # have - there are no error codes. Anything unrecognised passes through
+        # untouched: inventing an explanation for an error we have not seen would
+        # be worse than the raw dump.
+        if "No social accounts selected" in raw or "does not have a" in raw:
             return BufferApiError(
                 f"Il canale {bundle_type.title()} non risulta piu collegato: "
                 "l'account non e presente nello spazio dell'utente. "
-                "L'utente deve ricollegarlo dal portale perche questa campagna "
-                "possa raggiungerlo.",
+                "L'utente deve ricollegarlo dal portale.",
                 status_code=error.status_code,
                 category="channel_disconnected",
             )
+
+        if "doesn't have external ID for that platform" in raw:
+            return BufferApiError(
+                f"Il post non risulta pubblicato su {bundle_type.title()}: "
+                "il provider lo ha accettato ma non e mai uscito su questa "
+                "piattaforma, quindi non esistono statistiche da scaricare.",
+                status_code=error.status_code,
+                category="not_published",
+            )
+
         return error
+
 
     def get_post_status(self, api_key: str, external_post_id: str) -> Dict[str, Any]:
         result = self._request(api_key, "GET", f"/post/{external_post_id}")
@@ -579,10 +594,21 @@ class ProductionBundleSocialClient(BaseBufferClient):
             "provider": "bundle_social",
         }
 
-    def get_post_metrics(self, api_key: str, external_post_id: str) -> Dict[str, Any]:
+    def get_post_metrics(
+        self, api_key: str, external_post_id: str, platform: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Normalized engagement metrics, mapped onto the keys the statistics module
         already stores for Buffer.
+
+        ``platformType`` is REQUIRED by this endpoint, despite reading like a
+        filter. Omitting it does not return every platform's numbers - it returns
+        ``400 Request Validation Error``, which the statistics sync recorded as a
+        per-post error and then wrote a row of zeroes for. The dashboard showed
+        channels and posts with every metric at 0 and nothing anywhere saying
+        why, which is exactly the failure mode this module's own comments warn
+        about. Verified against the live API on 2026-09-10: with the parameter,
+        the same posts return real figures.
 
         Field parity, verified against the live schema:
           likes, comments, shares, views, impressions -> direct
@@ -594,16 +620,43 @@ class ProductionBundleSocialClient(BaseBufferClient):
             being computed from something else and quietly meaning something
             different than they do for Buffer.
         """
-        result = self._request(
-            api_key,
-            "GET",
-            "/analytics/post",
-            params={"postId": external_post_id},
-        )
+        bundle_type = PLATFORM_TO_BUNDLE.get((platform or "").lower())
+        if not bundle_type:
+            raise BufferApiError(
+                "Metriche non richiedibili senza la piattaforma del canale: "
+                f"'{platform}' non e' una piattaforma supportata.",
+                category="validation_failed",
+            )
+
+        try:
+            result = self._request(
+                api_key,
+                "GET",
+                "/analytics/post",
+                params={"postId": external_post_id, "platformType": bundle_type},
+            )
+        except BufferApiError as exc:
+            raise self._explain_rejection(exc, bundle_type) from exc
+
+        post = result.get("post") or {}
+        profile_post = result.get("profilePost") or {}
+
+        # Returned whatever the metrics look like: they are what tells us the
+        # post actually went live. Our own status stays "scheduled" forever
+        # otherwise - the provider accepted the post, and nothing ever came back
+        # to say it had been published (see docs/FUNCTIONALITY.md ss13).
+        published_state = {
+            "post_status": post.get("status"),
+            "published_at": profile_post.get("publishedAt") or post.get("postedDate"),
+            # profilePost carries the permalink directly; externalData is the
+            # fallback for a post whose profilePost has not been built yet.
+            "external_link": profile_post.get("permalink") or self._permalink_from(post),
+            "thumbnail_url": profile_post.get("thumbnail") or profile_post.get("smallThumbnail"),
+        }
 
         items = result.get("items") or []
         if not items:
-            return {"metrics": [], "metrics_updated_at": None, "provider": "bundle_social"}
+            return {"metrics": [], "metrics_updated_at": None, "provider": "bundle_social", **published_state}
 
         # Latest snapshot: the API appends a row per refresh.
         latest = items[-1]
@@ -631,9 +684,9 @@ class ProductionBundleSocialClient(BaseBufferClient):
         return {
             "metrics": metrics,
             "metrics_updated_at": latest.get("updatedAt"),
-            "external_link": self._permalink_from(result.get("post") or {}),
             "raw": latest,
             "provider": "bundle_social",
+            **published_state,
         }
 
     @staticmethod

@@ -209,6 +209,25 @@ per una limitazione che non esiste — ed e' il motivo per cui Instagram sembrav
 "richiedere una Pagina Facebook" qui mentre gli stessi account pubblicavano
 senza problemi tramite Buffer.
 
+### Analytics: `platformType` e' obbligatorio
+
+`GET /analytics/post` richiede **due** parametri, non uno:
+
+| Parametro | Obbligatorio | Note |
+|---|---|---|
+| `postId` | si | |
+| `platformType` | **si** | legge come un filtro, non lo e': senza, la risposta e' `400 Request Validation Error` |
+
+E' il difetto che ha tenuto a zero ogni statistica fino al 2026-09-10. Il client chiamava con il solo `postId`, il provider rifiutava, la sincronizzazione registrava un errore per post e scriveva comunque una riga di zeri: la dashboard mostrava canali e post con tutte le metriche a 0 e da nessuna parte il motivo. Con il parametro, gli stessi post restituiscono i numeri veri.
+
+Poiche' il parametro identifica *una piattaforma dentro un post*, `get_post_metrics` accetta ora anche `platform` e ogni chiamante passa quella del canale.
+
+### La sincronizzazione conferma anche la pubblicazione
+
+`GET /analytics/post` restituisce, oltre alle metriche, lo stato reale del post (`post.status`), quando e' uscito (`profilePost.publishedAt`) e il suo permalink.
+
+Serve perche' **nient'altro lo faceva**. Una pubblicazione programmata veniva accettata dal provider, marcata `scheduled`, e restava tale per sempre: nessun webhook di stato, nessun polling. In produzione al 2026-09-10 tutti i post risultavano ancora `scheduled` mentre il provider li dava per `POSTED` da un giorno, senza permalink e senza data di pubblicazione. La sincronizzazione delle statistiche e' l'unico momento in cui interroghiamo il provider su un post gia' inviato, quindi la conferma arriva li' (`_confirm_publication` in `tasks/statistics.py`). Non tocca mai una pubblicazione fallita.
+
 ### Parita' delle statistiche: quasi completa
 
 Mappatura verificata sullo schema reale:

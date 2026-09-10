@@ -154,7 +154,9 @@ class MockBufferClient(BaseBufferClient):
             "url": f"https://buffer.com/post/{external_post_id}",
         }
 
-    def get_post_metrics(self, api_key: str, external_post_id: str) -> Dict[str, Any]:
+    def get_post_metrics(
+        self, api_key: str, external_post_id: str, platform: Optional[str] = None
+    ) -> Dict[str, Any]:
         if "invalid" in api_key:
             raise BufferAuthError("Invalid API key", status_code=401)
 

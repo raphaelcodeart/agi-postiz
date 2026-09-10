@@ -93,6 +93,8 @@ def _apply_metrics(db, pub: Publication, sync_run_id: uuid.UUID | None, result: 
     if external_link and not pub.external_post_url:
         pub.external_post_url = external_link
 
+    _confirm_publication(pub, result)
+
     now = utc_now()
     row.external_post_url = pub.external_post_url or row.external_post_url
     row.published_at = pub.published_at or pub.scheduled_at
@@ -113,6 +115,43 @@ def _apply_metrics(db, pub: Publication, sync_run_id: uuid.UUID | None, result: 
             **{c: columns.get(c) for c in ALL_METRIC_COLUMNS},
         )
     )
+
+
+# Stati del provider che significano "il post e' davvero uscito". Solo questi:
+# un post ancora in coda o fallito upstream non deve diventare "published" da
+# noi, perche' e' lo stato su cui poggiano i conteggi della dashboard e la
+# regola di non ripubblicare mai qualcosa gia' pubblicato (AGENTS.md regola 2).
+PROVIDER_PUBLISHED_STATES = {"POSTED", "PUBLISHED", "SENT", "COMPLETED"}
+
+
+def _confirm_publication(pub: Publication, result: dict[str, Any]) -> None:
+    """
+    Porta la pubblicazione da "scheduled" a "published" quando il provider
+    conferma che il post e' uscito.
+
+    Serve perche' nulla lo faceva. Una pubblicazione programmata veniva accettata
+    dal provider, marcata "scheduled", e restava tale per sempre: nessun webhook,
+    nessun polling di stato (vedi docs/FUNCTIONALITY.md ss13). In produzione al
+    2026-09-10 tutti i post risultavano ancora "scheduled" mentre il provider li
+    dava per POSTED da un giorno, senza permalink e con la data di pubblicazione
+    vuota. La sincronizzazione delle statistiche e' l'unico momento in cui
+    interroghiamo il provider su un post gia' inviato, quindi e' qui che la
+    conferma arriva.
+
+    Non tocca mai una pubblicazione gia' "published", ne' una fallita: si limita
+    a chiudere il buco fra "consegnato al provider" e "uscito davvero".
+    """
+    if (result.get("post_status") or "").upper() not in PROVIDER_PUBLISHED_STATES:
+        return
+
+    if pub.status == "scheduled":
+        pub.status = "published"
+
+    if pub.published_at is None:
+        pub.published_at = _parse_buffer_datetime(result.get("published_at")) or utc_now()
+
+    if pub.confirmed_at is None:
+        pub.confirmed_at = utc_now()
 
 
 def _record_sync_error(db, pub: Publication, message: str) -> None:
@@ -143,7 +182,11 @@ def sync_publication_now(db, pub: Publication) -> StatPostMetric:
         raise SyncBusyError("Connessione occupata da un'altra sincronizzazione, riprova tra poco.")
 
     try:
-        result = provider_ctx.client.get_post_metrics(provider_ctx.api_key, pub.external_post_id)
+        result = provider_ctx.client.get_post_metrics(
+                provider_ctx.api_key,
+                pub.external_post_id,
+                platform=pub.social_channel.platform if pub.social_channel else None,
+            )
         _apply_metrics(db, pub, sync_run_id=None, result=result)
         db.commit()
     except BufferRateLimitError as e:
@@ -195,7 +238,11 @@ def sync_publication_metrics_task(self, publication_id_str: str, sync_run_id_str
 
         synced = False
         try:
-            result = provider_ctx.client.get_post_metrics(provider_ctx.api_key, pub.external_post_id)
+            result = provider_ctx.client.get_post_metrics(
+                provider_ctx.api_key,
+                pub.external_post_id,
+                platform=pub.social_channel.platform if pub.social_channel else None,
+            )
             _apply_metrics(db, pub, run.id, result)
             synced = True
         except BufferRateLimitError as e:

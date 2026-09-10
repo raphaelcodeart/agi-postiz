@@ -50,10 +50,18 @@ class BaseBufferClient(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def get_post_metrics(self, api_key: str, external_post_id: str) -> Dict[str, Any]:
+    def get_post_metrics(
+        self, api_key: str, external_post_id: str, platform: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Fetch engagement metrics (reactions, views, follows gained, etc.) for a
         single sent post. Buffer refreshes these once a day - a post can take up
         to ~24h after sending before metrics first appear.
+
+        ``platform`` is the channel's internal platform name. Buffer ignores it -
+        a Buffer post id already identifies one post on one channel - but a
+        provider addressing a *platform within a post* needs it, and refuses the
+        request without it. Optional in the signature so existing Buffer-only
+        callers keep working; callers that have it should always pass it.
         """
         pass

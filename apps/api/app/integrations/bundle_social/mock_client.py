@@ -127,7 +127,9 @@ class MockBundleSocialClient(BaseBufferClient):
     def get_post_status(self, api_key: str, external_post_id: str) -> Dict[str, Any]:
         return {"id": external_post_id, "status": "sent", "provider": "bundle_social"}
 
-    def get_post_metrics(self, api_key: str, external_post_id: str) -> Dict[str, Any]:
+    def get_post_metrics(
+        self, api_key: str, external_post_id: str, platform: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Deterministic pseudo-metrics seeded by post id, in the same normalized
         shape the statistics module already consumes from Buffer.

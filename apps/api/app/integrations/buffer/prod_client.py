@@ -283,7 +283,9 @@ class ProductionBufferClient(BaseBufferClient):
             "get_post_status is not yet implemented for the Buffer GraphQL API client"
         )
 
-    def get_post_metrics(self, api_key: str, external_post_id: str) -> Dict[str, Any]:
+    def get_post_metrics(
+        self, api_key: str, external_post_id: str, platform: Optional[str] = None
+    ) -> Dict[str, Any]:
         # Verified against developers.buffer.com/types/Post.html,
         # developers.buffer.com/types/PostMetric.html and the "Post Metrics" guide
         # (July 2026): `post(input: PostInput!)` returns `metrics: [PostMetric]` +
