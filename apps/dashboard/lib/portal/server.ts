@@ -75,6 +75,8 @@ export type PortalLineupChannel = {
   /** included | withdrawn | removed | null (never in the line-up) */
   participation_status: "included" | "withdrawn" | "removed" | null;
   joined_by_me: boolean;
+  /** True when a post for this campaign actually went out on this channel. */
+  published: boolean;
   decided_at: string | null;
   /** False when an administrator removed it: the user may not put it back. */
   can_rejoin: boolean;
@@ -101,6 +103,12 @@ export type PortalLineupCampaign = {
   included_count: number;
   withdrawn_count: number;
   can_join: boolean;
+  /**
+   * open     - the window is open: the user can join or leave
+   * closed   - announced, deadline passed, not launched yet
+   * launched - already gone out: read-only history
+   */
+  phase: "open" | "closed" | "launched";
 };
 
 export type PortalOverview = {

@@ -29,6 +29,7 @@ export function daysUntil(value: string | null): number | null {
 }
 
 export type LineupState =
+  | "published"
   | "participating"
   | "declined"
   | "removed"
@@ -45,6 +46,9 @@ export type LineupState =
  * end up disagreeing.
  */
 export function lineupState(campaign: PortalLineupCampaign): LineupState {
+  if (campaign.phase === "launched") {
+    return campaign.channels.some((c) => c.published) ? "published" : "declined";
+  }
   if (campaign.included_count > 0) return "participating";
   if (campaign.channels.length === 0) return "no_channels";
   if (campaign.channels.some((c) => c.participation_status === "removed")) return "removed";
@@ -55,6 +59,7 @@ export function lineupState(campaign: PortalLineupCampaign): LineupState {
 }
 
 export const STATE_LABELS: Record<LineupState, string> = {
+  published: "Pubblicata",
   participating: "Partecipi",
   declined: "Non partecipi",
   removed: "Escluso",

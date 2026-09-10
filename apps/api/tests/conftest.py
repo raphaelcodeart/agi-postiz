@@ -104,3 +104,39 @@ def db(db_engine) -> Session:
         if transaction.is_active:
             transaction.rollback()
         connection.close()
+
+
+@pytest.fixture()
+def client(db):
+    """
+    FastAPI test client wired to the throwaway database.
+
+    The portal endpoints are worth testing through HTTP rather than by calling
+    the functions: their whole job is to scope what one signed-in user can see,
+    and that scoping lives in the dependency that resolves the token as much as
+    in the query underneath it.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.db.session import get_db
+    from app.main import app
+
+    app.dependency_overrides[get_db] = lambda: db
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.fixture()
+def portal_token():
+    """Mints a portal session for a user, the way logging in would."""
+    from app.core.security import TOKEN_TYPE_PORTAL_USER, SecurityService
+
+    def _token(user):
+        token = SecurityService.create_access_token(
+            subject=user.id, token_type=TOKEN_TYPE_PORTAL_USER
+        )
+        return {"Authorization": f"Bearer {token}"}
+
+    return _token

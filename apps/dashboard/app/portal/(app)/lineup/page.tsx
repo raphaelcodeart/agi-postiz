@@ -2,6 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
   AlertTriangleIcon,
+  HistoryIcon,
+  SendIcon,
   CalendarClockIcon,
   CheckCircle2Icon,
   ChevronRightIcon,
@@ -28,6 +30,10 @@ export const dynamic = "force-dynamic";
  */
 
 const STATE_STYLES: Record<LineupState, { className: string; icon: React.ComponentType<{ className?: string }> }> = {
+  published: {
+    className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+    icon: SendIcon,
+  },
   participating: {
     className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
     icon: CheckCircle2Icon,
@@ -73,6 +79,18 @@ function StateBadge({ state }: { state: LineupState }) {
  * says what happens when it passes, which differs per campaign.
  */
 function Deadline({ campaign }: { campaign: PortalLineupCampaign }) {
+  // A campaign already gone out has no deadline left to talk about: what the
+  // reader needs is when it went, not by when they could have withdrawn.
+  if (campaign.phase === "launched") {
+    return (
+      <span className="text-muted-foreground">
+        {campaign.scheduled_at
+          ? `Pubblicata il ${formatDateTime(campaign.scheduled_at)}`
+          : "Già pubblicata"}
+      </span>
+    );
+  }
+
   if (!campaign.opt_out_deadline_at) {
     return (
       <span className="text-muted-foreground">
@@ -104,7 +122,12 @@ export default async function PortalLineupPage() {
 
   if (!user) redirect("/portal/login");
 
-  const campaigns = lineup ?? [];
+  const all = lineup ?? [];
+  // Two very different things share this page: decisions with a clock on them,
+  // and a record of what already went out. Keeping them in one list would bury
+  // the first under the second as soon as a promoter has any history.
+  const upcoming = all.filter((campaign) => campaign.phase !== "launched");
+  const past = all.filter((campaign) => campaign.phase === "launched");
 
   return (
     <div className="flex flex-col gap-8">
@@ -116,7 +139,7 @@ export default async function PortalLineupPage() {
         </p>
       </div>
 
-      {campaigns.length === 0 ? (
+      {upcoming.length === 0 && past.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-2 p-10 text-center">
             <MegaphoneIcon className="size-8 text-muted-foreground" />
@@ -128,6 +151,32 @@ export default async function PortalLineupPage() {
           </CardContent>
         </Card>
       ) : (
+        <CampaignList campaigns={upcoming} />
+      )}
+
+      {past.length > 0 && (
+        <section className="flex flex-col gap-3">
+          <div>
+            <h2 className="flex items-center gap-2 text-sm font-semibold tracking-wide text-muted-foreground uppercase">
+              <HistoryIcon className="size-4" />
+              Campagne già partite
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Le trovi qui per consultarle. I post sono già usciti, quindi non è più possibile
+              modificare la partecipazione.
+            </p>
+          </div>
+          <CampaignList campaigns={past} />
+        </section>
+      )}
+    </div>
+  );
+}
+
+function CampaignList({ campaigns }: { campaigns: PortalLineupCampaign[] }) {
+  if (campaigns.length === 0) return null;
+
+  return (
         <div className="flex flex-col gap-3">
           {campaigns.map((campaign) => {
             const state = lineupState(campaign);
@@ -153,14 +202,16 @@ export default async function PortalLineupPage() {
                     </div>
 
                     <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
-                      <span className="flex items-center gap-1.5">
-                        <CalendarClockIcon className="size-4 shrink-0 text-muted-foreground" />
-                        {campaign.scheduled_at ? (
-                          <>Pubblicazione {formatDateTime(campaign.scheduled_at)}</>
-                        ) : (
-                          <span className="text-muted-foreground">Pubblicazione da definire</span>
-                        )}
-                      </span>
+                      {campaign.phase !== "launched" && (
+                        <span className="flex items-center gap-1.5">
+                          <CalendarClockIcon className="size-4 shrink-0 text-muted-foreground" />
+                          {campaign.scheduled_at ? (
+                            <>Pubblicazione {formatDateTime(campaign.scheduled_at)}</>
+                          ) : (
+                            <span className="text-muted-foreground">Pubblicazione da definire</span>
+                          )}
+                        </span>
+                      )}
 
                       <span className="flex items-center gap-1.5">
                         <ClockIcon className="size-4 shrink-0 text-muted-foreground" />
@@ -180,7 +231,7 @@ export default async function PortalLineupPage() {
                       </div>
                     )}
 
-                    {state === "no_channels" && (
+                    {state === "no_channels" && campaign.phase !== "launched" && (
                       <p className="text-sm text-amber-600 dark:text-amber-400">
                         Collega un canale per poter partecipare.
                       </p>
@@ -191,7 +242,5 @@ export default async function PortalLineupPage() {
             );
           })}
         </div>
-      )}
-    </div>
   );
 }

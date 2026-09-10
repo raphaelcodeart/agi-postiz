@@ -839,6 +839,12 @@ def remove_my_channel(
 # Campaign line-up: what a user is invited to, and their right to leave it
 # --------------------------------------------------------------------------
 
+# Quante campagne gia' concluse mostrare nel palinsesto. Sufficiente a coprire
+# mesi di attivita' senza trasformare la pagina in un archivio: lo storico
+# completo, con i numeri, resta la pagina Storico.
+HISTORY_LIMIT = 20
+
+
 class PortalLineupChannel(BaseModel):
     """One of the user's channels, and where it stands in this campaign."""
     id: str
@@ -850,6 +856,8 @@ class PortalLineupChannel(BaseModel):
     participation_status: Optional[str]
     # True when this user put the channel in themselves.
     joined_by_me: bool
+    # True when a post for this campaign actually went out on this channel.
+    published: bool = False
     decided_at: Optional[datetime]
     # False when an administrator removed the channel: the user may not put it
     # back, and the interface has to say so rather than offer a button that
@@ -885,6 +893,10 @@ class PortalLineupCampaign(BaseModel):
     withdrawn_count: int
     # True when the user has no channel in this campaign but could add one.
     can_join: bool
+    # "open"     la finestra e' aperta: si puo' entrare o uscire
+    # "closed"   annunciata, termine scaduto, non ancora lanciata
+    # "launched" gia' partita: sola lettura, i post sono usciti
+    phase: str
 
 
 class PortalParticipationRequest(BaseModel):
@@ -916,15 +928,31 @@ def _lineup_payload(
     campaign: Campaign,
     user: User,
     user_channels: List[SocialChannel],
+    published_channel_ids: Optional[set] = None,
 ) -> PortalLineupCampaign:
+    """
+    One campaign as this user sees it.
+
+    ``published_channel_ids`` carries the channels that actually received a post,
+    and is what lets an already-launched campaign appear here as history. Those
+    campaigns often have no participant rows at all - anything published before
+    the line-up existed, or in "automatic" mode, went straight from targeting to
+    publication - so their record of "I was in this" lives only in the
+    publications. Without it a past campaign would render as though the user had
+    never taken part.
+    """
     participants = campaign_participation.participants_for_user(db, campaign.id, user.id)
     window_open = campaign_participation.is_window_open(campaign)
+    launched = campaign.status not in ("draft", campaign_participation.OPEN_STATUS)
+    published_channel_ids = published_channel_ids or set()
     media_url, media_type = _campaign_media(campaign)
 
     channels: List[PortalLineupChannel] = []
     for channel in user_channels:
         participant = participants.get(channel.id)
         status_value = participant.status if participant else None
+        if status_value is None and channel.id in published_channel_ids:
+            status_value = CampaignParticipant.STATUS_INCLUDED
         channels.append(
             PortalLineupChannel(
                 id=str(channel.id),
@@ -942,6 +970,7 @@ def _lineup_payload(
                     and status_value != CampaignParticipant.STATUS_REMOVED
                     and status_value != CampaignParticipant.STATUS_INCLUDED
                 ),
+                published=channel.id in published_channel_ids,
             )
         )
 
@@ -969,6 +998,7 @@ def _lineup_payload(
         included_count=included,
         withdrawn_count=withdrawn,
         can_join=window_open and included == 0 and any(c.can_rejoin or c.participation_status is None for c in channels),
+        phase="launched" if launched else ("open" if window_open else "closed"),
     )
 
 
@@ -986,19 +1016,68 @@ def list_lineup(
     administrator to notice and add them by hand is the manual step this whole
     feature exists to remove. Joining is one click and takes effect immediately;
     the administrator sees who joined, marked as such, in the line-up panel.
+
+    Campaigns that have already gone out follow, read-only, so the page answers
+    "which campaigns am I in" rather than only "which can I still leave". Their
+    channels are read from the user's own publications, which is what makes this
+    work for everything published before the line-up existed.
     """
-    campaigns = (
+    open_campaigns = (
         db.query(Campaign)
         .options(joinedload(Campaign.media_file))
         .filter(Campaign.status == campaign_participation.OPEN_STATUS)
         .order_by(Campaign.opt_out_deadline_at.asc().nullslast(), Campaign.announced_at.desc())
         .all()
     )
-    if not campaigns:
+
+    # Campaigns already gone out that this user was part of, so the page reads as
+    # "the campaigns I am in", not only "the ones still up for decision". Scoped
+    # through the user's own publications: that is the record of what actually
+    # reached their channels, and it exists for campaigns published long before
+    # the line-up did.
+    published_rows = (
+        db.query(Publication.campaign_id, Publication.social_channel_id)
+        .filter(Publication.user_id == current_user.id)
+        .all()
+    )
+    published_by_campaign: Dict[Any, set] = {}
+    for campaign_id, channel_id in published_rows:
+        published_by_campaign.setdefault(campaign_id, set()).add(channel_id)
+
+    open_ids = {campaign.id for campaign in open_campaigns}
+    history_ids = [cid for cid in published_by_campaign if cid not in open_ids]
+
+    history_campaigns: List[Campaign] = []
+    if history_ids:
+        history_campaigns = (
+            db.query(Campaign)
+            .options(joinedload(Campaign.media_file))
+            .filter(
+                Campaign.id.in_(history_ids),
+                # A campaign still being prepared is not history yet, and showing
+                # it as such would be wrong twice over.
+                Campaign.status.notin_(("draft", campaign_participation.OPEN_STATUS)),
+            )
+            .order_by(Campaign.started_at.desc().nullslast(), Campaign.created_at.desc())
+            .limit(HISTORY_LIMIT)
+            .all()
+        )
+
+    if not open_campaigns and not history_campaigns:
         return []
 
     user_channels = campaign_participation.eligible_channels_for_user(db, current_user.id)
-    return [_lineup_payload(db, campaign, current_user, user_channels) for campaign in campaigns]
+
+    return [
+        _lineup_payload(
+            db,
+            campaign,
+            current_user,
+            user_channels,
+            published_channel_ids=published_by_campaign.get(campaign.id),
+        )
+        for campaign in [*open_campaigns, *history_campaigns]
+    ]
 
 
 @router.get("/lineup/{campaign_id}", response_model=PortalLineupCampaign)
@@ -1036,11 +1115,32 @@ def get_lineup_campaign(
             )
             .first()
         )
+        # ...or took part the old way, through a publication. Checking only
+        # participants would have hidden every campaign published before the
+        # line-up existed - which is most of a promoter's history.
+        if takes_part is None:
+            takes_part = (
+                db.query(Publication)
+                .filter(
+                    Publication.campaign_id == campaign.id,
+                    Publication.user_id == current_user.id,
+                )
+                .first()
+            )
         if takes_part is None:
             raise HTTPException(status_code=404, detail="Campagna non trovata.")
 
+    published_channel_ids = {
+        row[0]
+        for row in db.query(Publication.social_channel_id).filter(
+            Publication.campaign_id == campaign.id,
+            Publication.user_id == current_user.id,
+        )
+    }
     user_channels = campaign_participation.eligible_channels_for_user(db, current_user.id)
-    return _lineup_payload(db, campaign, current_user, user_channels)
+    return _lineup_payload(
+        db, campaign, current_user, user_channels, published_channel_ids=published_channel_ids
+    )
 
 
 def _open_campaign_or_404(db: Session, campaign_id: uuid.UUID) -> Campaign:

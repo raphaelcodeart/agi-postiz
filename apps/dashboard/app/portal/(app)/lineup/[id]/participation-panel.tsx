@@ -129,6 +129,22 @@ export function ParticipationPanel({ campaign }: { campaign: PortalLineupCampaig
     }
   }
 
+  // Already published: nothing to decide, only a record to read. Saying "the
+  // deadline has passed" here would be technically true and beside the point.
+  if (campaign.phase === "launched") {
+    const published = campaign.channels.filter((c) => c.published);
+    return (
+      <Alert>
+        <CalendarClockIcon className="size-4" />
+        <AlertDescription>
+          {published.length > 0
+            ? `Campagna già pubblicata su ${published.length === 1 ? "un tuo canale" : `${published.length} dei tuoi canali`}. I risultati sono nel Riepilogo.`
+            : "Questa campagna è già stata pubblicata. Non ha coinvolto i tuoi canali."}
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
   if (!campaign.window_open) {
     return (
       <Alert>
