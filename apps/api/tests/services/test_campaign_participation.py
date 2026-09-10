@@ -451,3 +451,71 @@ def test_an_ordinary_scheduled_campaign_is_still_picked_up(db, world):
     )
 
     assert campaign.id in [c.id for c in picked_up]
+
+
+# --- targeting "tutti i canali attivi" --------------------------------------
+
+def test_announcing_all_active_channels_reaches_every_promoter(db, world):
+    """
+    The mode an administrator reaches for most often, and the one where an empty
+    line-up is hardest to notice: nobody was named, so nobody is obviously
+    missing. Every active channel of every active user must end up in the
+    line-up, already marked as taking part - each owner then decides whether to
+    stay, exactly as with a hand-picked selection.
+    """
+    from app.services.campaign_resolver import CampaignResolver
+
+    campaign = world["campaign"]
+    campaign.targeting_mode = "all_active_channels"
+    db.commit()
+
+    channels = CampaignResolver.resolve_targets(db, campaign, {})
+    participation.announce(db, campaign, channels)
+
+    included = set(participation.included_channel_ids(db, campaign.id))
+    assert included == {world["anna_ig"].id, world["anna_tt"].id, world["bruno_ig"].id}
+
+    # ...and each owner sees their own, not somebody else's.
+    for user_key, expected in [
+        ("anna", {world["anna_ig"].id, world["anna_tt"].id}),
+        ("bruno", {world["bruno_ig"].id}),
+    ]:
+        mine = participation.participants_for_user(db, campaign.id, world[user_key].id)
+        assert set(mine) == expected
+
+
+def test_all_active_channels_skips_channels_that_cannot_publish(db, world):
+    """
+    "Tutti" means every channel that can actually receive a post, not every row
+    in the table - otherwise the line-up promises publications that will fail.
+    """
+    from app.services.campaign_resolver import CampaignResolver
+
+    world["anna_tt"].is_active = False
+    world["bruno_ig"].publication_mode = "disabled"
+    db.commit()
+
+    campaign = world["campaign"]
+    campaign.targeting_mode = "all_active_channels"
+    db.commit()
+
+    channels = CampaignResolver.resolve_targets(db, campaign, {})
+    participation.announce(db, campaign, channels)
+
+    assert participation.included_channel_ids(db, campaign.id) == [world["anna_ig"].id]
+
+
+def test_all_active_channels_excludes_a_suspended_user(db, world):
+    from app.services.campaign_resolver import CampaignResolver
+
+    world["bruno"].status = "suspended"
+    campaign = world["campaign"]
+    campaign.targeting_mode = "all_active_channels"
+    db.commit()
+
+    channels = CampaignResolver.resolve_targets(db, campaign, {})
+    participation.announce(db, campaign, channels)
+
+    included = set(participation.included_channel_ids(db, campaign.id))
+    assert world["bruno_ig"].id not in included
+    assert included == {world["anna_ig"].id, world["anna_tt"].id}

@@ -13,10 +13,12 @@ import {
   CopyIcon,
   Trash2Icon,
   BarChart3Icon,
+  MegaphoneIcon,
   Loader2Icon,
 } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { AnnounceDialog } from "./_components/announce-dialog";
 import { LineupPanel } from "./_components/lineup-panel";
 import { PlatformBadge } from "@/components/shared/platform-badge";
 import { CampaignProgress } from "@/components/shared/campaign-progress";
@@ -94,6 +96,7 @@ export default function CampaignDetailPage({ params }: { params: Promise<{ id: s
   const retryPublication = useRetryPublication();
   const retryCampaignFailures = useRetryCampaignFailures();
   const launchCampaign = useLaunchCampaign();
+  const [announceOpen, setAnnounceOpen] = useState(false);
 
   function withToast(promise: Promise<unknown>, successMessage: string) {
     promise
@@ -196,6 +199,12 @@ export default function CampaignDetailPage({ params }: { params: Promise<{ id: s
         description={`Modalità: ${campaign.publishing_mode} · Destinatari: ${campaign.targeting_mode}`}
         actions={
           <>
+            {campaign.status === "draft" && (
+              <Button variant="outline" onClick={() => setAnnounceOpen(true)}>
+                <MegaphoneIcon className="size-4" />
+                Metti in palinsesto
+              </Button>
+            )}
             <Button variant="outline" onClick={() => router.push(`/campaigns/new?duplicate=${campaign.id}`)}>
               <CopyIcon className="size-4" />
               Duplica
@@ -254,8 +263,11 @@ export default function CampaignDetailPage({ params }: { params: Promise<{ id: s
       {/* Above the progress card: while a campaign is in the line-up it has no
           publications at all, so the progress card is empty and this is the only
           thing on the page with anything to say. */}
+      <AnnounceDialog campaign={campaign} open={announceOpen} onOpenChange={setAnnounceOpen} />
+
       <LineupPanel
         campaign={campaign}
+        onAnnounce={() => setAnnounceOpen(true)}
         launching={launchCampaign.isPending}
         onLaunch={() =>
           withToast(

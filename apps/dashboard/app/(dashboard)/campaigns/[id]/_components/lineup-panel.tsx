@@ -3,6 +3,7 @@
 import { useState } from "react";
 import {
   ClockIcon,
+  MegaphoneIcon,
   Loader2Icon,
   MinusCircleIcon,
   RocketIcon,
@@ -50,17 +51,46 @@ const STATUS_META: Record<
 export function LineupPanel({
   campaign,
   onLaunch,
+  onAnnounce,
   launching,
 }: {
   campaign: CampaignResponse;
   onLaunch: () => void;
+  onAnnounce: () => void;
   launching: boolean;
 }) {
-  const lineupQuery = useCampaignLineup(campaign.id, campaign.participation_mode === "opt_out");
+  const announced = campaign.participation_mode === "opt_out" && campaign.announced_at !== null;
+  const lineupQuery = useCampaignLineup(campaign.id, announced);
   const removeParticipant = useRemoveCampaignParticipant(campaign.id);
   const [removingId, setRemovingId] = useState<string | null>(null);
 
-  if (campaign.participation_mode !== "opt_out") return null;
+  // A draft that has never been announced gets the invitation to do so instead
+  // of nothing at all. Before this the panel simply did not render, so the
+  // feature was invisible unless it had been chosen in the creation wizard -
+  // and a campaign that missed that moment could never be announced.
+  if (!announced) {
+    if (campaign.status !== "draft") return null;
+    return (
+      <Card className="border-primary/30 bg-primary/5">
+        <CardContent className="flex flex-wrap items-center justify-between gap-4 p-5">
+          <div className="space-y-1">
+            <p className="flex items-center gap-2 font-medium">
+              <UsersIcon className="size-4" />
+              Questa campagna non è ancora in palinsesto
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Mettila in palinsesto per mostrarla ai destinatari e lasciare che si tolgano
+              prima dell&apos;avvio. Non viene inviato nulla.
+            </p>
+          </div>
+          <Button onClick={onAnnounce}>
+            <MegaphoneIcon className="size-4" />
+            Metti in palinsesto
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
 
   const lineup = lineupQuery.data;
 
