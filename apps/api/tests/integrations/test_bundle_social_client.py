@@ -13,7 +13,9 @@ import pytest
 from app.integrations.buffer.exceptions import BufferApiError
 from app.integrations.bundle_social.prod_client import (
     BUNDLE_TO_PLATFORM,
+    PLATFORM_TEXT_MAX_CHARS,
     PLATFORM_TO_BUNDLE,
+    YOUTUBE_TITLE_MAX_CHARS,
     ProductionBundleSocialClient,
 )
 
@@ -54,9 +56,107 @@ def test_instagram_connected_via_facebook_is_marked_business():
     assert ProductionBundleSocialClient._channel_type(account) == "business"
 
 
-def test_instagram_connected_directly_is_marked_profile():
+def test_instagram_connected_directly_is_also_business():
+    """
+    Regression test for the bug that made Instagram look like it "required a
+    Facebook Page". ``instagramConnectionMethod: "INSTAGRAM"`` means the account
+    authorised through Instagram API with Instagram Login - a Business/Creator
+    account publishing without a Page, which Meta has allowed since 2024.
+
+    This used to return "profile", which campaign_resolver reads as "personal
+    account, can never publish" and excludes before making any call. Every real
+    Instagram account in this deployment connects this way, so every one of them
+    was being rejected for a limitation that does not exist.
+    """
     account = {"type": "INSTAGRAM", "instagramConnectionMethod": "INSTAGRAM"}
-    assert ProductionBundleSocialClient._channel_type(account) == "profile"
+    assert ProductionBundleSocialClient._channel_type(account) == "business"
+
+
+def test_no_instagram_connection_method_is_still_business():
+    """A missing method must not fall back to the excluding value."""
+    assert ProductionBundleSocialClient._channel_type({"type": "INSTAGRAM"}) == "business"
+
+
+# --- YouTube title/description ---------------------------------------------
+#
+# bundle.social's ``data.YOUTUBE.text`` is the video TITLE (max 100 chars) and
+# the caption goes in ``description``. The client used to send the caption as
+# ``text`` - rejected with "Max 100 characters allowed" on every attempt - and
+# the title under a ``title`` key the schema does not define, which was dropped.
+
+def _capture(client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        client, "_request",
+        lambda *a, **k: (captured.update(k.get("json_body") or {}), {"id": "p", "errors": {}})[1],
+    )
+    return captured
+
+
+def test_youtube_maps_title_and_description_to_the_right_fields(monkeypatch):
+    client = _client()
+    captured = _capture(client, monkeypatch)
+
+    client.create_post(
+        api_key="k", channel_id="sa", text="Descrizione lunga del video",
+        platform="youtube", youtube_title="Il mio titolo",
+    )
+
+    youtube = captured["data"]["YOUTUBE"]
+    assert youtube["text"] == "Il mio titolo"
+    assert youtube["description"] == "Descrizione lunga del video"
+    # The key the schema ignores must not be what carries the title any more.
+    assert youtube.get("title") is None
+
+
+def test_youtube_title_derived_from_a_long_caption_is_clipped_to_100(monkeypatch):
+    """
+    With no youtube_title set the title is derived from the caption, which is
+    routinely longer than YouTube's 100-character limit. Truncating publishes a
+    sensibly-titled video; sending it whole fails the campaign permanently.
+    """
+    client = _client()
+    captured = _capture(client, monkeypatch)
+
+    client.create_post(api_key="k", channel_id="sa", text="A" * 400, platform="youtube")
+
+    youtube = captured["data"]["YOUTUBE"]
+    assert len(youtube["text"]) <= YOUTUBE_TITLE_MAX_CHARS
+    assert youtube["text"].endswith("\u2026")
+    # The caption itself is untouched - only the derived title was shortened.
+    assert youtube["description"] == "A" * 400
+
+
+def test_youtube_without_any_text_still_gets_a_title(monkeypatch):
+    client = _client()
+    captured = _capture(client, monkeypatch)
+    client.create_post(api_key="k", channel_id="sa", text="", platform="youtube")
+    assert captured["data"]["YOUTUBE"]["text"] == "Video"
+
+
+def test_disconnected_channel_rejection_is_explained(monkeypatch):
+    """
+    "No social accounts selected" reads like a malformed request; it actually
+    means the team no longer holds an account of that platform. Reporting it
+    verbatim sent an administrator looking for a bug in the payload instead of
+    asking the user to reconnect.
+    """
+    client = _client()
+
+    def fake_request(*a, **k):
+        raise BufferApiError(
+            'Richiesta bundle.social rifiutata: {"statusCode":400,"message":"No social accounts selected"}',
+            status_code=400,
+            category="validation_failed",
+        )
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    with pytest.raises(BufferApiError) as excinfo:
+        client.create_post(api_key="k", channel_id="sa", text="t", platform="linkedin")
+
+    assert excinfo.value.category == "channel_disconnected"
+    assert "ricollegarlo" in excinfo.value.message
 
 
 def test_sync_channels_maps_a_real_account_payload(monkeypatch):

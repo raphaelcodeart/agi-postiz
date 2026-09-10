@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
   BarChart3Icon,
+  CalendarClockIcon,
   EyeIcon,
   HeartIcon,
   InfoIcon,
@@ -18,10 +19,12 @@ import { PlatformIcon } from "@/components/shared/platform-badge";
 import {
   portalFetch,
   type PortalCampaign,
+  type PortalLineupCampaign,
   type PortalOverview,
   type PortalUser,
 } from "@/lib/portal/server";
 import { ActivityChart } from "./activity-chart";
+import { LineupSpotlight } from "./lineup-spotlight";
 
 export const dynamic = "force-dynamic";
 
@@ -72,8 +75,23 @@ function StatTile({
 }
 
 /** Top-of-page shortcuts to the sections, so the dashboard is a hub not a dead end. */
-function QuickLinks({ channels, campaigns }: { channels: number; campaigns: number }) {
+function QuickLinks({
+  channels,
+  campaigns,
+  lineup,
+}: {
+  channels: number;
+  campaigns: number;
+  lineup: number;
+}) {
   const links = [
+    {
+      href: "/portal/lineup",
+      label: "Palinsesto",
+      count: lineup,
+      icon: CalendarClockIcon,
+      description: "Campagne in programma",
+    },
     {
       href: "/portal/channels",
       label: "I miei canali",
@@ -83,7 +101,7 @@ function QuickLinks({ channels, campaigns }: { channels: number; campaigns: numb
     },
     {
       href: "/portal/campaigns",
-      label: "Le mie campagne",
+      label: "Storico campagne",
       count: campaigns,
       icon: MegaphoneIcon,
       description: "Risultati per campagna",
@@ -91,7 +109,7 @@ function QuickLinks({ channels, campaigns }: { channels: number; campaigns: numb
   ];
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="grid gap-3 sm:grid-cols-3">
       {links.map((link) => (
         <Link
           key={link.href}
@@ -115,10 +133,11 @@ function QuickLinks({ channels, campaigns }: { channels: number; campaigns: numb
 }
 
 export default async function PortalDashboardPage() {
-  const [user, overview, campaigns] = await Promise.all([
+  const [user, overview, campaigns, lineup] = await Promise.all([
     portalFetch<PortalUser>("me"),
     portalFetch<PortalOverview>("overview"),
     portalFetch<PortalCampaign[]>("campaigns"),
+    portalFetch<PortalLineupCampaign[]>("lineup"),
   ]);
 
   if (!user) redirect("/portal/login");
@@ -142,22 +161,29 @@ export default async function PortalDashboardPage() {
         </Button>
       </div>
 
-      {/* Right after registration an account is inactive by design, so this is an
-          explanation rather than an error - nothing is broken. */}
+      {/* Only reachable now when an operator has switched automatic activation
+          off, or the account was suspended - so it says what actually unblocks
+          it rather than "wait". */}
       {!user.is_active_for_campaigns && (
         <Alert>
           <InfoIcon className="size-4" />
-          <AlertTitle>Account in attesa di attivazione</AlertTitle>
+          <AlertTitle>Account non ancora attivo per le campagne</AlertTitle>
           <AlertDescription>
-            Puoi già collegare i tuoi canali. Verrai incluso nelle campagne appena un
-            amministratore attiva il tuo account.
+            Puoi già collegare i tuoi canali: collegandone uno il tuo account si attiva
+            automaticamente. Se hai già collegato dei canali, contatta l&apos;amministratore.
           </AlertDescription>
         </Alert>
       )}
 
+      {/* Above everything else on purpose: an open campaign is the only thing on
+          this page with a deadline attached, and the whole point of announcing a
+          campaign is that people see it in time to decide. Statistics can wait. */}
+      <LineupSpotlight campaigns={lineup ?? []} />
+
       <QuickLinks
         channels={stats?.channels_connected ?? 0}
         campaigns={stats?.campaigns_joined ?? 0}
+        lineup={(lineup ?? []).length}
       />
 
       {stats && stats.channels_connected === 0 && (

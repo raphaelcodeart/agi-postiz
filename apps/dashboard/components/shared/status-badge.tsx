@@ -39,6 +39,8 @@ const STATUS_TONE: Record<string, Tone> = {
   invalid: "destructive",
   // Campaigns
   draft: "neutral",
+  // The opt-out window: announced to its participants, nothing sent yet.
+  announced: "warning",
   preparing: "info",
   queued: "info",
   running: "info",
@@ -94,6 +96,7 @@ const STATUS_LABELS: Record<string, string> = {
   warning: "Attenzione",
   invalid: "Non valido",
   draft: "Bozza",
+  announced: "In palinsesto",
   preparing: "Preparazione",
   queued: "In coda",
   running: "In corso",

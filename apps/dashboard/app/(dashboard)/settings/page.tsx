@@ -35,6 +35,7 @@ import {
 import { settingsFormSchema, type SettingsFormValues } from "@/lib/validation/settings";
 import { formatBytes, formatDateTime } from "@/lib/format";
 import { ApiError } from "@/lib/api/errors";
+import { PlatformSettingsCard } from "./_components/platform-settings-card";
 
 const FIELDS: {
   name: keyof SettingsFormValues;
@@ -50,12 +51,12 @@ const FIELDS: {
   {
     name: "concurrent_jobs_per_connection",
     label: "Job simultanei per connessione",
-    description: "Numero massimo di richieste in parallelo verso la stessa connessione Buffer.",
+    description: "Numero massimo di richieste in parallelo verso la stessa connessione.",
   },
   {
     name: "pause_between_requests_seconds",
     label: "Pausa tra richieste (secondi)",
-    description: "Intervallo minimo tra due richieste consecutive verso Buffer.",
+    description: "Intervallo minimo tra due richieste consecutive verso il servizio di pubblicazione.",
   },
   {
     name: "max_publication_attempts",
@@ -211,11 +212,13 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <PageHeader title="Impostazioni" description="Parametri operativi del motore di pubblicazione" />
 
+      <PlatformSettingsCard />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Stato del sistema</CardTitle>
           <CardDescription>
-            Modalità integrazione Buffer:{" "}
+            Modalità integrazione:{" "}
             <span className="font-medium text-foreground">{settingsQuery.data?.buffer_integration_mode ?? "—"}</span>
           </CardDescription>
         </CardHeader>

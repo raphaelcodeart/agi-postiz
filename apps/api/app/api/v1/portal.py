@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
 from app.core.security import TOKEN_TYPE_PORTAL_USER, SecurityService
@@ -32,10 +32,11 @@ from app.db.session import get_db
 from app.integrations.buffer.exceptions import BufferApiError
 from app.integrations.providers import PROVIDER_BUNDLE_SOCIAL, PROVIDER_LABELS
 from app.models.buffer import BufferConnection, BufferOrganization, SocialChannel
-from app.models.campaign import Campaign, CampaignTarget
+from app.models.campaign import Campaign, CampaignParticipant, CampaignTarget
 from app.models.publication import Publication
 from app.models.statistics import StatPostMetric
 from app.models.user import User
+from app.services import campaign_participation, user_activation
 
 router = APIRouter()
 
@@ -111,6 +112,18 @@ class PortalCampaignResponse(BaseModel):
     published: int
     failed: int
     pending: int
+    # How this user stands in the campaign's line-up. A campaign they declined
+    # produces no targets and no publications at all, so without these two it
+    # would vanish from their history - which is exactly the record they need to
+    # be able to check ("did I actually say no to that one?").
+    participation_included: int = 0
+    participation_withdrawn: int = 0
+    # Taken out by an administrator rather than by the user. Reported separately
+    # because the two read very differently to the person looking at their own
+    # history: one is a decision they made, the other is one made about them, and
+    # collapsing them would have the portal tell someone they declined a campaign
+    # they never declined.
+    participation_removed: int = 0
 
 
 class PortalStatsResponse(BaseModel):
@@ -174,11 +187,11 @@ def register(payload: PortalRegisterRequest, db: Session = Depends(get_db)):
     """
     Self-service registration.
 
-    A new account starts ``status="inactive"``: that is what keeps it out of
-    campaign targeting until an administrator vets it (see the note on
-    ``User.self_registered_at``). The user can sign in immediately, connect
-    their channels and see their dashboard - they simply are not published to
-    yet.
+    A new account starts active unless an administrator has turned automatic
+    activation off (PlatformSettings.auto_activate_new_users) - see
+    services/user_activation.py for why that default flipped. With it off the
+    account still works: the user signs in, connects channels and sees their
+    dashboard; it is only campaign targeting that waits.
     """
     email = payload.email.lower().strip()
     existing = db.query(User).filter(func.lower(User.email) == email).first()
@@ -192,6 +205,11 @@ def register(payload: PortalRegisterRequest, db: Session = Depends(get_db)):
             raise HTTPException(status_code=409, detail="Esiste già un account con questa email.")
         existing.password_hash = SecurityService.hash_password(payload.password)
         existing.self_registered_at = datetime.now(timezone.utc)
+        # An administrator created this row and may have set its status
+        # deliberately; claiming it must not silently promote a suspended
+        # account, so only the waiting-room state is resolved.
+        if existing.status == user_activation.STATUS_INACTIVE:
+            existing.status = user_activation.status_for_new_registration(db)
         if payload.company_name:
             existing.company_name = payload.company_name
         user = existing
@@ -200,7 +218,7 @@ def register(payload: PortalRegisterRequest, db: Session = Depends(get_db)):
             name=payload.name.strip(),
             email=email,
             company_name=payload.company_name,
-            status="inactive",
+            status=user_activation.status_for_new_registration(db),
             password_hash=SecurityService.hash_password(payload.password),
             self_registered_at=datetime.now(timezone.utc),
         )
@@ -334,13 +352,24 @@ def list_my_campaigns(
     targeted by simply does not appear, and the counters below are filtered by
     the same user id rather than aggregated campaign-wide.
     """
-    campaign_ids = [
+    # Union of two routes into a campaign, not just one: a campaign the user was
+    # offered and declined has no CampaignTarget row by design, and filtering on
+    # targets alone would erase every refusal from their own history.
+    targeted_ids = {
         row[0]
         for row in db.query(CampaignTarget.campaign_id)
         .filter(CampaignTarget.user_id == current_user.id)
         .distinct()
         .all()
-    ]
+    }
+    participated_ids = {
+        row[0]
+        for row in db.query(CampaignParticipant.campaign_id)
+        .filter(CampaignParticipant.user_id == current_user.id)
+        .distinct()
+        .all()
+    }
+    campaign_ids = list(targeted_ids | participated_ids)
     if not campaign_ids:
         return []
 
@@ -371,6 +400,23 @@ def list_my_campaigns(
     for campaign_id, pub_status, count in status_rows:
         by_campaign.setdefault(campaign_id, {})[pub_status] = count
 
+    participation_rows = (
+        db.query(
+            CampaignParticipant.campaign_id,
+            CampaignParticipant.status,
+            func.count(CampaignParticipant.id),
+        )
+        .filter(
+            CampaignParticipant.user_id == current_user.id,
+            CampaignParticipant.campaign_id.in_(campaign_ids),
+        )
+        .group_by(CampaignParticipant.campaign_id, CampaignParticipant.status)
+        .all()
+    )
+    participation_by_campaign: Dict[Any, Dict[str, int]] = {}
+    for campaign_id, participation_status, count in participation_rows:
+        participation_by_campaign.setdefault(campaign_id, {})[participation_status] = count
+
     result = []
     for campaign in campaigns:
         statuses = by_campaign.get(campaign.id, {})
@@ -380,6 +426,7 @@ def list_my_campaigns(
             count for key, count in statuses.items()
             if key in ("pending", "queued", "processing", "retry_wait")
         )
+        participation = participation_by_campaign.get(campaign.id, {})
         result.append(
             PortalCampaignResponse(
                 id=str(campaign.id),
@@ -390,6 +437,15 @@ def list_my_campaigns(
                 published=published,
                 failed=failed,
                 pending=pending,
+                participation_included=participation.get(
+                    CampaignParticipant.STATUS_INCLUDED, 0
+                ),
+                participation_withdrawn=participation.get(
+                    CampaignParticipant.STATUS_WITHDRAWN, 0
+                ),
+                participation_removed=participation.get(
+                    CampaignParticipant.STATUS_REMOVED, 0
+                ),
             )
         )
     return result
@@ -517,7 +573,7 @@ def create_connect_link(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=(
                 "Il collegamento diretto dei canali non è ancora attivo su questo server. "
-                "Nel frattempo un amministratore può collegare i tuoi canali tramite Buffer."
+                "Nel frattempo un amministratore può collegare i tuoi canali per te."
             ),
         )
 
@@ -636,10 +692,19 @@ def sync_my_channels(
         SocialChannel.provider == PROVIDER_BUNDLE_SOCIAL
     ).count()
 
-    return ConnectSyncResponse(
-        channels=count,
-        message="Canali aggiornati." if count else "Nessun canale trovato: completa l'autorizzazione sul social.",
-    )
+    # Connecting a real channel is what an account was waiting to prove. Doing it
+    # here rather than in the sync task keeps it on the one path that means "this
+    # person just finished authorising something".
+    activated = bool(count) and user_activation.activate_on_channel_connection(db, current_user)
+
+    if not count:
+        message = "Nessun canale trovato: completa l'autorizzazione sul social."
+    elif activated:
+        message = "Canali aggiornati. Il tuo account e ora attivo per le campagne."
+    else:
+        message = "Canali aggiornati."
+
+    return ConnectSyncResponse(channels=count, message=message)
 
 
 class PortalTimelinePoint(BaseModel):
@@ -768,3 +833,314 @@ def remove_my_channel(
     channel.deleted_at = datetime.now(timezone.utc)
     channel.publication_mode = "disabled"
     db.commit()
+
+
+# --------------------------------------------------------------------------
+# Campaign line-up: what a user is invited to, and their right to leave it
+# --------------------------------------------------------------------------
+
+class PortalLineupChannel(BaseModel):
+    """One of the user's channels, and where it stands in this campaign."""
+    id: str
+    platform: str
+    name: str
+    username: Optional[str]
+    avatar_url: Optional[str]
+    # included | withdrawn | removed | None (never in the line-up)
+    participation_status: Optional[str]
+    # True when this user put the channel in themselves.
+    joined_by_me: bool
+    decided_at: Optional[datetime]
+    # False when an administrator removed the channel: the user may not put it
+    # back, and the interface has to say so rather than offer a button that
+    # silently fails.
+    can_rejoin: bool
+
+
+class PortalLineupCampaign(BaseModel):
+    id: str
+    title: str
+    status: str
+    # The text this user's channels would publish. The campaign's default text,
+    # not any per-platform override: the point is to let someone read what they
+    # would be posting before deciding, and showing eight variants of it would
+    # obscure that rather than serve it.
+    text: str
+    media_url: Optional[str]
+    media_type: Optional[str]
+    scheduled_at: Optional[datetime]
+    timezone: str
+    opt_out_deadline_at: Optional[datetime]
+    # True while this user can still change their participation.
+    window_open: bool
+    # True when the campaign launches by itself at the deadline, which changes
+    # what the deadline means for the reader.
+    auto_launch_at_deadline: bool
+    announced_at: Optional[datetime]
+    # This user's own channels, with their standing. Includes channels not in
+    # the line-up at all, so the "partecipa" flow has something to offer.
+    channels: List[PortalLineupChannel]
+    # Convenience counters so the list page needs no client-side arithmetic.
+    included_count: int
+    withdrawn_count: int
+    # True when the user has no channel in this campaign but could add one.
+    can_join: bool
+
+
+class PortalParticipationRequest(BaseModel):
+    # Channels to act on. Omitted or empty means "all of mine in this campaign"
+    # for a withdrawal - the one-click "non partecipo" the portal offers - and is
+    # rejected for a join, where there is nothing sensible to guess.
+    channel_ids: List[str] = Field(default_factory=list)
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
+class PortalParticipationResponse(BaseModel):
+    changed: int
+    message: str
+    # Channels that could not be added, each with its reason. Not an error: a
+    # user ticking four channels where one has gone stale gets the other three.
+    warnings: List[str] = Field(default_factory=list)
+
+
+def _campaign_media(campaign: Campaign) -> tuple:
+    media = campaign.media_file
+    if media is None:
+        return None, None
+    media_type = "video" if (media.mime_type or "").startswith("video") else "image"
+    return media.public_url, media_type
+
+
+def _lineup_payload(
+    db: Session,
+    campaign: Campaign,
+    user: User,
+    user_channels: List[SocialChannel],
+) -> PortalLineupCampaign:
+    participants = campaign_participation.participants_for_user(db, campaign.id, user.id)
+    window_open = campaign_participation.is_window_open(campaign)
+    media_url, media_type = _campaign_media(campaign)
+
+    channels: List[PortalLineupChannel] = []
+    for channel in user_channels:
+        participant = participants.get(channel.id)
+        status_value = participant.status if participant else None
+        channels.append(
+            PortalLineupChannel(
+                id=str(channel.id),
+                platform=channel.platform,
+                name=channel.name,
+                username=channel.username,
+                avatar_url=channel.avatar_url,
+                participation_status=status_value,
+                joined_by_me=bool(
+                    participant and participant.added_by == CampaignParticipant.SOURCE_USER
+                ),
+                decided_at=participant.decided_at if participant else None,
+                can_rejoin=(
+                    window_open
+                    and status_value != CampaignParticipant.STATUS_REMOVED
+                    and status_value != CampaignParticipant.STATUS_INCLUDED
+                ),
+            )
+        )
+
+    included = sum(
+        1 for c in channels if c.participation_status == CampaignParticipant.STATUS_INCLUDED
+    )
+    withdrawn = sum(
+        1 for c in channels if c.participation_status == CampaignParticipant.STATUS_WITHDRAWN
+    )
+
+    return PortalLineupCampaign(
+        id=str(campaign.id),
+        title=campaign.title,
+        status=campaign.status,
+        text=campaign.default_text,
+        media_url=media_url,
+        media_type=media_type,
+        scheduled_at=campaign.scheduled_at,
+        timezone=campaign.timezone,
+        opt_out_deadline_at=campaign.opt_out_deadline_at,
+        window_open=window_open,
+        auto_launch_at_deadline=campaign.auto_launch_at_deadline,
+        announced_at=campaign.announced_at,
+        channels=channels,
+        included_count=included,
+        withdrawn_count=withdrawn,
+        can_join=window_open and included == 0 and any(c.can_rejoin or c.participation_status is None for c in channels),
+    )
+
+
+@router.get("/lineup", response_model=List[PortalLineupCampaign])
+def list_lineup(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_portal_user),
+):
+    """
+    Every campaign currently open for participation - including ones this user
+    was not put in.
+
+    Showing all of them is deliberate. A promoter who was left out of a campaign
+    they would have wanted has no way to discover it otherwise, and asking an
+    administrator to notice and add them by hand is the manual step this whole
+    feature exists to remove. Joining is one click and takes effect immediately;
+    the administrator sees who joined, marked as such, in the line-up panel.
+    """
+    campaigns = (
+        db.query(Campaign)
+        .options(joinedload(Campaign.media_file))
+        .filter(Campaign.status == campaign_participation.OPEN_STATUS)
+        .order_by(Campaign.opt_out_deadline_at.asc().nullslast(), Campaign.announced_at.desc())
+        .all()
+    )
+    if not campaigns:
+        return []
+
+    user_channels = campaign_participation.eligible_channels_for_user(db, current_user.id)
+    return [_lineup_payload(db, campaign, current_user, user_channels) for campaign in campaigns]
+
+
+@router.get("/lineup/{campaign_id}", response_model=PortalLineupCampaign)
+def get_lineup_campaign(
+    campaign_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_portal_user),
+):
+    """
+    One campaign in full: its text, its media, when it goes out, and this user's
+    own standing in it.
+
+    Readable for any announced campaign, not only ones the user is in - that is
+    what makes the "partecipa" button on the list page lead somewhere. It exposes
+    nothing about other participants.
+    """
+    campaign = (
+        db.query(Campaign)
+        .options(joinedload(Campaign.media_file))
+        .filter(Campaign.id == campaign_id)
+        .first()
+    )
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campagna non trovata.")
+
+    # A campaign the user takes part in stays readable after launch, so their
+    # history has somewhere to link to. One they were never in does not: before
+    # it is announced it is somebody's private draft.
+    if campaign.status != campaign_participation.OPEN_STATUS:
+        takes_part = (
+            db.query(CampaignParticipant)
+            .filter(
+                CampaignParticipant.campaign_id == campaign.id,
+                CampaignParticipant.user_id == current_user.id,
+            )
+            .first()
+        )
+        if takes_part is None:
+            raise HTTPException(status_code=404, detail="Campagna non trovata.")
+
+    user_channels = campaign_participation.eligible_channels_for_user(db, current_user.id)
+    return _lineup_payload(db, campaign, current_user, user_channels)
+
+
+def _open_campaign_or_404(db: Session, campaign_id: uuid.UUID) -> Campaign:
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campagna non trovata.")
+    return campaign
+
+
+def _parse_channel_ids(raw: List[str]) -> List[uuid.UUID]:
+    parsed = []
+    for value in raw:
+        try:
+            parsed.append(uuid.UUID(value))
+        except (ValueError, AttributeError):
+            raise HTTPException(status_code=400, detail="Identificativo canale non valido.")
+    return parsed
+
+
+@router.post("/lineup/{campaign_id}/withdraw", response_model=PortalParticipationResponse)
+def withdraw_from_campaign(
+    campaign_id: uuid.UUID,
+    payload: PortalParticipationRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_portal_user),
+):
+    """
+    Take this user's channels out of a campaign before it is launched.
+
+    The user id comes from the validated token and is the filter on every row
+    touched (see campaign_participation.withdraw), so a channel id belonging to
+    somebody else simply matches nothing.
+    """
+    campaign = _open_campaign_or_404(db, campaign_id)
+    channel_ids = _parse_channel_ids(payload.channel_ids) if payload.channel_ids else None
+
+    try:
+        changed = campaign_participation.withdraw(
+            db,
+            campaign,
+            user_id=current_user.id,
+            channel_ids=channel_ids,
+            reason=payload.reason,
+        )
+    except campaign_participation.ParticipationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    if changed == 0:
+        return PortalParticipationResponse(
+            changed=0, message="Nessuna partecipazione da annullare."
+        )
+    return PortalParticipationResponse(
+        changed=changed,
+        message=(
+            "Non parteciperai a questa campagna."
+            if changed == 1
+            else f"{changed} canali rimossi da questa campagna."
+        ),
+    )
+
+
+@router.post("/lineup/{campaign_id}/join", response_model=PortalParticipationResponse)
+def join_campaign(
+    campaign_id: uuid.UUID,
+    payload: PortalParticipationRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_portal_user),
+):
+    """
+    Put this user's own channels into an open campaign.
+
+    Takes effect immediately, with no administrator approval: a promoter opting
+    IN to promotional content is not a decision that needs vetting, and requiring
+    approval would reintroduce exactly the manual queue this replaces.
+    """
+    campaign = _open_campaign_or_404(db, campaign_id)
+    if not payload.channel_ids:
+        raise HTTPException(status_code=400, detail="Seleziona almeno un canale.")
+
+    channel_ids = _parse_channel_ids(payload.channel_ids)
+
+    try:
+        added, warnings = campaign_participation.join(
+            db, campaign, user_id=current_user.id, channel_ids=channel_ids
+        )
+    except campaign_participation.ParticipationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    if added == 0:
+        return PortalParticipationResponse(
+            changed=0,
+            message="Nessun canale aggiunto.",
+            warnings=warnings,
+        )
+    return PortalParticipationResponse(
+        changed=added,
+        message=(
+            "Parteciperai a questa campagna."
+            if added == 1
+            else f"{added} canali aggiunti a questa campagna."
+        ),
+        warnings=warnings,
+    )

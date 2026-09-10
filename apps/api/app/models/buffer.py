@@ -127,6 +127,9 @@ class SocialChannel(Base):
     campaign_targets: Mapped[List["CampaignTarget"]] = relationship(
         "CampaignTarget", back_populates="social_channel", cascade="all, delete-orphan"
     )
+    campaign_participations: Mapped[List["CampaignParticipant"]] = relationship(
+        "CampaignParticipant", back_populates="social_channel", cascade="all, delete-orphan"
+    )
     publications: Mapped[List["Publication"]] = relationship(
         "Publication", back_populates="social_channel", cascade="all, delete-orphan"
     )

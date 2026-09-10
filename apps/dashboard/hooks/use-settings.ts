@@ -56,3 +56,20 @@ export function useDeleteAISettings() {
     },
   });
 }
+
+export function usePlatformSettings() {
+  return useQuery({
+    queryKey: ["settings", "platform"],
+    queryFn: settingsService.getPlatformSettings,
+  });
+}
+
+export function useUpdatePlatformSettings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: settingsService.updatePlatformSettings,
+    onSuccess: (data) => {
+      queryClient.setQueryData(["settings", "platform"], data);
+    },
+  });
+}

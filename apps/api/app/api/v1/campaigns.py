@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import uuid
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.db.session import get_db
 from app.api.v1.auth import get_current_admin
 from app.models.administrator import Administrator
-from app.models.campaign import Campaign, CampaignTarget
+from app.models.campaign import Campaign, CampaignParticipant, CampaignTarget
 from app.models.publication import Publication
 from app.models.media import MediaFile
 from app.models.audit import AuditLog
@@ -15,8 +15,12 @@ from app.core.security import EncryptionService
 from app.integrations.providers import get_provider_context
 from app.integrations.buffer.exceptions import BufferApiError
 from app.services.campaign_resolver import CampaignResolver
+from app.services import campaign_participation
 from app.schemas.schemas import (
+    CampaignAnnounceRequest,
     CampaignCreate,
+    CampaignLineupResponse,
+    CampaignParticipantResponse,
     CampaignResponse,
     CampaignPreviewResponse,
     CampaignDetailResponse,
@@ -86,6 +90,10 @@ def create_campaign(
         targeting_mode=payload.targeting_mode,
         include_referral_link=payload.include_referral_link,
         include_personal_contacts=payload.include_personal_contacts,
+        include_affiliate_disclosure=payload.include_affiliate_disclosure,
+        participation_mode=payload.participation_mode,
+        opt_out_deadline_at=payload.opt_out_deadline_at,
+        auto_launch_at_deadline=payload.auto_launch_at_deadline,
         status="draft",
         created_by=admin.id,
         metadata_json=payload.targeting_params, # Save targeting parameters here
@@ -123,6 +131,187 @@ def preview_targets(
     
     preview = CampaignResolver.preview_campaign_targets(db, campaign, payload.targeting_params)
     return preview
+
+
+def _lineup_response(db: Session, campaign: Campaign) -> CampaignLineupResponse:
+    """Assemble the line-up panel in one query rather than one per participant."""
+    rows = (
+        db.query(CampaignParticipant)
+        .options(
+            joinedload(CampaignParticipant.user),
+            joinedload(CampaignParticipant.social_channel),
+        )
+        .filter(CampaignParticipant.campaign_id == campaign.id)
+        .all()
+    )
+
+    participants = [
+        CampaignParticipantResponse(
+            id=row.id,
+            user_id=row.user_id,
+            user_name=row.user.name if row.user else "—",
+            social_channel_id=row.social_channel_id,
+            channel_name=row.social_channel.name if row.social_channel else "—",
+            platform=row.social_channel.platform if row.social_channel else "unknown",
+            status=row.status,
+            added_by=row.added_by,
+            decided_at=row.decided_at,
+            decided_reason=row.decided_reason,
+        )
+        for row in rows
+    ]
+
+    def count(status_name: str) -> int:
+        return sum(1 for row in rows if row.status == status_name)
+
+    return CampaignLineupResponse(
+        campaign_id=campaign.id,
+        status=campaign.status,
+        participation_mode=campaign.participation_mode,
+        announced_at=campaign.announced_at,
+        opt_out_deadline_at=campaign.opt_out_deadline_at,
+        auto_launch_at_deadline=campaign.auto_launch_at_deadline,
+        window_open=campaign_participation.is_window_open(campaign),
+        included_count=count(CampaignParticipant.STATUS_INCLUDED),
+        withdrawn_count=count(CampaignParticipant.STATUS_WITHDRAWN),
+        removed_count=count(CampaignParticipant.STATUS_REMOVED),
+        participants=sorted(participants, key=lambda p: (p.user_name, p.platform)),
+    )
+
+
+@router.post("/{campaign_id}/announce", response_model=CampaignLineupResponse)
+def announce_campaign(
+    campaign_id: uuid.UUID,
+    payload: CampaignAnnounceRequest,
+    db: Session = Depends(get_db),
+    admin: Administrator = Depends(get_current_admin),
+):
+    """
+    Publish the campaign's line-up to the people it targets, without sending
+    anything anywhere.
+
+    This is the step that exists so that "I do not want to be in this one" is a
+    thing a promoter can still say. Launching hands the provider every post with
+    its date; announcing only resolves who would be in it and shows them.
+
+    Re-announcing tops the line-up up with newly matching channels and leaves
+    every existing decision alone - see campaign_participation.announce.
+    """
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    if campaign.status not in ("draft", campaign_participation.OPEN_STATUS):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Solo una campagna in bozza puo essere messa in palinsesto: "
+                f"questa e in stato \"{campaign.status}\"."
+            ),
+        )
+
+    deadline = payload.opt_out_deadline_at
+    if deadline is not None:
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=timezone.utc)
+        if deadline <= datetime.now(timezone.utc):
+            raise HTTPException(
+                status_code=400,
+                detail="Il termine per il ritiro deve essere nel futuro.",
+            )
+        # A window that closes after the posts are due would be a promise we
+        # cannot keep: publishing happens at scheduled_at, so anyone withdrawing
+        # after that has already been published.
+        scheduled_at = campaign.scheduled_at
+        if scheduled_at is not None and scheduled_at.tzinfo is None:
+            scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+        if scheduled_at is not None and deadline >= scheduled_at:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Il termine per il ritiro deve precedere la data di "
+                    "pubblicazione programmata della campagna."
+                ),
+            )
+
+    if payload.auto_launch_at_deadline and deadline is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Per avviare la campagna automaticamente serve un termine per il "
+                "ritiro: senza scadenza non c'e un momento in cui partire."
+            ),
+        )
+
+    campaign.opt_out_deadline_at = deadline
+    campaign.auto_launch_at_deadline = payload.auto_launch_at_deadline
+
+    targeting_params = payload.targeting_params or campaign.metadata_json or {}
+    campaign.metadata_json = targeting_params
+
+    channels = CampaignResolver.resolve_targets(db, campaign, targeting_params)
+    if not channels and not campaign_participation.included_channel_ids(db, campaign.id):
+        raise HTTPException(status_code=400, detail=CampaignResolver._explain_no_targets(db))
+
+    campaign_participation.announce(db, campaign, channels, admin_id=admin.id)
+    db.refresh(campaign)
+    return _lineup_response(db, campaign)
+
+
+@router.get("/{campaign_id}/lineup", response_model=CampaignLineupResponse)
+def get_campaign_lineup(
+    campaign_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    admin: Administrator = Depends(get_current_admin),
+):
+    """Who is in this campaign, who withdrew, and who joined on their own."""
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return _lineup_response(db, campaign)
+
+
+@router.delete("/{campaign_id}/lineup/{participant_id}", response_model=CampaignLineupResponse)
+def remove_participant(
+    campaign_id: uuid.UUID,
+    participant_id: uuid.UUID,
+    reason: Optional[str] = None,
+    db: Session = Depends(get_db),
+    admin: Administrator = Depends(get_current_admin),
+):
+    """
+    Take one channel out of the line-up as an administrator.
+
+    Recorded as "removed" rather than "withdrawn" so the two never get confused
+    in the promoter's own history - and so the owner cannot simply put it back
+    (see campaign_participation.join).
+    """
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    participant = (
+        db.query(CampaignParticipant)
+        .filter(
+            CampaignParticipant.id == participant_id,
+            CampaignParticipant.campaign_id == campaign_id,
+        )
+        .first()
+    )
+    if not participant:
+        raise HTTPException(status_code=404, detail="Partecipante non trovato")
+
+    campaign_participation.withdraw(
+        db,
+        campaign,
+        user_id=participant.user_id,
+        channel_ids=[participant.social_channel_id],
+        reason=reason,
+        by_admin=True,
+        admin_id=admin.id,
+    )
+    db.refresh(campaign)
+    return _lineup_response(db, campaign)
 
 
 @router.post("/{campaign_id}/launch", response_model=CampaignResponse)

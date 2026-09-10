@@ -332,9 +332,20 @@ def poll_and_queue_scheduled_publications() -> None:
         now = datetime.now(timezone.utc)
 
         # 1. Look for scheduled campaigns
+        #
+        # Opt-out campaigns are excluded here even while still in "draft". Their
+        # route to publication runs through announce -> the deadline (or an
+        # administrator pressing Launch), never through the publishing date on
+        # its own. Without this filter a campaign created with
+        # participation_mode="opt_out" but not yet announced - the wizard failing
+        # between the two calls is enough - would be launched to every resolved
+        # channel the moment scheduled_at arrived, with no window and nobody able
+        # to withdraw. That is the exact outcome the mode exists to prevent, and
+        # it would happen silently.
         scheduled_campaigns = db.query(Campaign).filter(
             Campaign.status == "draft",
             Campaign.publishing_mode == "scheduled",
+            Campaign.participation_mode != "opt_out",
             Campaign.scheduled_at <= now
         ).all()
 
@@ -350,6 +361,40 @@ def poll_and_queue_scheduled_publications() -> None:
                 CampaignResolver.launch_campaign(db, camp.id, targeting_params)
             except Exception as e:
                 logger.error(f"Failed to auto-launch scheduled campaign {camp.id}: {str(e)}")
+
+        # 1b. Announced campaigns whose opt-out window has closed and that are
+        #     set to launch themselves. Deliberately separate from the scheduled
+        #     branch above: those launch when their publishing time arrives, these
+        #     launch when the withdrawal deadline passes, and the two are usually
+        #     different moments (announce Monday, window closes Wednesday, posts
+        #     go out Friday). An announced campaign with auto_launch off is left
+        #     alone here - it waits for an administrator to press Launch, which is
+        #     the whole point of the flag.
+        from app.services.campaign_participation import OPEN_STATUS, is_due_for_auto_launch
+
+        announced_campaigns = db.query(Campaign).filter(
+            Campaign.status == OPEN_STATUS,
+            Campaign.auto_launch_at_deadline.is_(True),
+            Campaign.opt_out_deadline_at.isnot(None),
+            Campaign.opt_out_deadline_at <= now,
+        ).all()
+
+        for camp in announced_campaigns:
+            if not is_due_for_auto_launch(camp, now):
+                continue
+            logger.info(
+                f"Announced campaign {camp.id} ({camp.title}) reached its opt-out "
+                f"deadline. Launching with the remaining line-up."
+            )
+            try:
+                from app.services.campaign_resolver import CampaignResolver
+                CampaignResolver.launch_campaign(db, camp.id, camp.metadata_json or {})
+            except Exception as e:
+                # Left in "announced" by launch_campaign when the line-up came
+                # back empty, so the next pass retries rather than the campaign
+                # being stuck. Anything else is logged and skipped for the same
+                # reason: one bad campaign must not stop the poll.
+                logger.error(f"Failed to auto-launch announced campaign {camp.id}: {str(e)}")
 
         # 2. Find all pending and ready-to-retry publications
         pending_pubs = db.query(Publication).filter(

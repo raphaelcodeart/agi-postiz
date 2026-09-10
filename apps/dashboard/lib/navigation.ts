@@ -44,7 +44,7 @@ export const MAIN_NAV_ITEMS: NavItem[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboardIcon },
   { href: "/users", label: "Utenti", icon: UsersIcon },
   { href: "/groups", label: "Gruppi", icon: UsersRoundIcon },
-  { href: "/buffer-connections", label: "Connessioni Buffer", icon: LinkIcon },
+  { href: "/buffer-connections", label: "Connessioni account", icon: LinkIcon },
   { href: "/channels", label: "Canali social", icon: Share2Icon },
   { href: "/media", label: "Media", icon: ImagesIcon },
 ];

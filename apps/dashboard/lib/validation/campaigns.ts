@@ -9,6 +9,8 @@ export const publishingModeValues = [
   "approval",
 ] as const;
 
+export const participationModeValues = ["automatic", "opt_out"] as const;
+
 export const targetingModeValues = [
   "all_active_channels",
   "selected_users",
@@ -89,6 +91,11 @@ export const campaignWizardSchema = z
     publishing_mode: z.enum(publishingModeValues),
     scheduled_at: z.string().optional().nullable(),
     timezone: z.string().min(1),
+
+    // Step 5 - Participation
+    participation_mode: z.enum(participationModeValues),
+    opt_out_deadline_at: z.string().optional().nullable(),
+    auto_launch_at_deadline: z.boolean(),
   })
   .superRefine((data, ctx) => {
     const reservedChars =
@@ -120,6 +127,39 @@ export const campaignWizardSchema = z
         message: "Seleziona una data di programmazione",
         path: ["scheduled_at"],
       });
+    }
+
+    if (data.participation_mode === "opt_out") {
+      // Mirrors the backend's own checks in api/v1/campaigns.py announce_campaign,
+      // so the wizard says no before a round trip does. The backend remains the
+      // real gate - this is only there to fail earlier and more legibly.
+      if (data.auto_launch_at_deadline && !data.opt_out_deadline_at) {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            "Per avviare la campagna automaticamente serve un termine: senza scadenza non c'è un momento in cui partire",
+          path: ["opt_out_deadline_at"],
+        });
+      }
+      if (data.opt_out_deadline_at) {
+        const deadline = new Date(data.opt_out_deadline_at).getTime();
+        if (deadline <= Date.now()) {
+          ctx.addIssue({
+            code: "custom",
+            message: "Il termine per il ritiro deve essere nel futuro",
+            path: ["opt_out_deadline_at"],
+          });
+        }
+        if (data.scheduled_at && deadline >= new Date(data.scheduled_at).getTime()) {
+          // A window that closes after the posts are due is a promise we cannot
+          // keep: by then they have already gone out.
+          ctx.addIssue({
+            code: "custom",
+            message: "Il termine deve precedere la data di pubblicazione",
+            path: ["opt_out_deadline_at"],
+          });
+        }
+      }
     }
     if (data.targeting_mode === "selected_users" && !data.user_ids?.length) {
       ctx.addIssue({
@@ -158,7 +198,14 @@ export const WIZARD_STEP_FIELDS: (keyof CampaignWizardValues)[][] = [
   ["default_text", "x_text", "threads_text", "include_referral_link", "include_personal_contacts", "include_affiliate_disclosure"],
   ["media_file_id"],
   ["targeting_mode", "user_ids", "group_ids", "channel_ids", "platform_names"],
-  ["publishing_mode", "scheduled_at", "timezone"],
+  [
+    "publishing_mode",
+    "scheduled_at",
+    "timezone",
+    "participation_mode",
+    "opt_out_deadline_at",
+    "auto_launch_at_deadline",
+  ],
   [],
 ];
 
@@ -191,6 +238,13 @@ export function toCampaignCreatePayload(values: CampaignWizardValues): CampaignC
     publishing_mode: values.publishing_mode,
     scheduled_at: values.scheduled_at ? new Date(values.scheduled_at).toISOString() : null,
     timezone: values.timezone,
+    participation_mode: values.participation_mode,
+    opt_out_deadline_at:
+      values.participation_mode === "opt_out" && values.opt_out_deadline_at
+        ? new Date(values.opt_out_deadline_at).toISOString()
+        : null,
+    auto_launch_at_deadline:
+      values.participation_mode === "opt_out" && values.auto_launch_at_deadline,
     targeting_mode: values.targeting_mode,
     targeting_params: buildTargetingParams(values),
   };
@@ -227,6 +281,12 @@ export function campaignToWizardDefaults(campaign: CampaignResponse): Partial<Ca
     publishing_mode: "immediate",
     scheduled_at: null,
     timezone: campaign.timezone,
+    // Same reasoning as publishing_mode above: a copied campaign must not
+    // inherit a deadline that has already passed, or an auto-launch the admin
+    // did not choose for this one.
+    participation_mode: campaign.participation_mode ?? "automatic",
+    opt_out_deadline_at: null,
+    auto_launch_at_deadline: false,
   };
 }
 

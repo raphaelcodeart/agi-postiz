@@ -67,7 +67,7 @@ export default function BufferConnectionsPage() {
             <div>
               <span>{usersById.get(row.original.user_id) ?? row.original.user_id}</span>
               <span className="block text-[10px] text-muted-foreground">
-                {row.original.provider === "bundle_social" ? "Collegato da noi" : "Buffer"}
+                {row.original.provider === "bundle_social" ? "Agi Post" : "Buffer (legacy)"}
                 {row.original.external_account_id ? ` · ${row.original.external_account_id}` : ""}
               </span>
             </div>
@@ -143,8 +143,8 @@ export default function BufferConnectionsPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Connessioni Buffer"
-        description="Account Buffer collegati per la pubblicazione sui canali social"
+        title="Connessioni account"
+        description="Account collegati per la pubblicazione sui canali social"
         actions={
           <Button
             onClick={() => {
@@ -165,8 +165,8 @@ export default function BufferConnectionsPage() {
         isError={connectionsQuery.isError}
         error={connectionsQuery.error}
         onRetry={() => connectionsQuery.refetch()}
-        emptyTitle="Nessuna connessione Buffer"
-        emptyDescription="Collega un account Buffer per iniziare a pubblicare sui canali social."
+        emptyTitle="Nessuna connessione"
+        emptyDescription="Gli utenti collegano i propri canali dal portale. Qui puoi collegare anche un account Buffer esistente."
       />
 
       <ConnectUserDialog open={connectOpen} onOpenChange={setConnectOpen} preselectedUserId={reconnectUserId} />
@@ -174,7 +174,7 @@ export default function BufferConnectionsPage() {
       <ConfirmDialog
         open={!!disconnectTarget}
         onOpenChange={(open) => !open && setDisconnectTarget(null)}
-        title="Disconnettere questo account Buffer?"
+        title="Disconnettere questo account?"
         description="I canali social collegati non saranno più raggiungibili per la pubblicazione finché non si ricollega l'account."
         confirmLabel="Disconnetti"
         destructive

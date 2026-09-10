@@ -78,7 +78,7 @@ export default function ChannelsPage() {
   async function handleRefreshAll() {
     const connections = connectionsQuery.data ?? [];
     if (connections.length === 0) {
-      toast.info("Nessuna connessione Buffer da sincronizzare");
+      toast.info("Nessuna connessione da sincronizzare");
       return;
     }
 
@@ -208,7 +208,7 @@ export default function ChannelsPage() {
     <div className="space-y-4">
       <PageHeader
         title="Canali social"
-        description="Profili social collegati tramite Buffer e modalità di pubblicazione"
+        description="Profili social collegati e modalità di pubblicazione"
         actions={
           <Button variant="outline" onClick={handleRefreshAll} disabled={isRefreshing}>
             <RefreshCwIcon className={isRefreshing ? "size-4 animate-spin" : "size-4"} />

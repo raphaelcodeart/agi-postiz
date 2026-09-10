@@ -45,7 +45,7 @@ const QUICK_ACTIONS: QuickAction[] = [
   { href: "/publications", label: "Pubblicazioni", description: "Stato invii", icon: SendIcon, toneClass: "bg-chart-2/12 text-chart-2" },
   { href: "/media", label: "Media", description: "Foto e video", icon: ImagesIcon, toneClass: "bg-chart-3/12 text-chart-3" },
   { href: "/channels", label: "Canali social", description: "Profili collegati", icon: Share2Icon, toneClass: "bg-chart-4/12 text-chart-4" },
-  { href: "/buffer-connections", label: "Connessioni Buffer", description: "Account collegati", icon: LinkIcon, toneClass: "bg-chart-5/12 text-chart-5" },
+  { href: "/buffer-connections", label: "Connessioni account", description: "Account collegati", icon: LinkIcon, toneClass: "bg-chart-5/12 text-chart-5" },
   { href: "/users", label: "Utenti", description: "Clienti e amici", icon: UsersIcon, toneClass: "bg-chart-1/12 text-chart-1" },
   { href: "/groups", label: "Gruppi", description: "Segmenti utenti", icon: UsersRoundIcon, toneClass: "bg-chart-2/12 text-chart-2" },
   { href: "/errors", label: "Centro errori", description: "Problemi da risolvere", icon: AlertOctagonIcon, toneClass: "bg-chart-3/12 text-chart-3" },
@@ -123,7 +123,7 @@ export default function DashboardOverviewPage() {
           loading={isLoadingStats}
         />
         <StatCard
-          label="Account Buffer collegati"
+          label="Account collegati"
           value={connectedConnections ?? "—"}
           hint={connections.data ? `su ${connections.data.length} totali` : undefined}
           icon={LinkIcon}

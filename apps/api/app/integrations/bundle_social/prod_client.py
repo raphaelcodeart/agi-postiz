@@ -16,7 +16,10 @@ Verified contract:
   POST /api/v1/social-account/create-portal-link
        {teamId, socialAccountTypes[], redirectUrl} -> {url}
   POST /api/v1/post/  {teamId, title, postDate, status, socialAccountTypes[], data}
-       (the API itself listed these six as required)
+       (the API itself listed these six as required; the per-platform shape of
+        `data` was mapped from its validator on 2026-09-10 - see
+        PLATFORM_TEXT_MAX_CHARS below, and note that for YouTube `text` is the
+        video title, not the description)
   GET  /api/v1/post/{postId}
   GET  /api/v1/analytics/post?postId&platformType -> {post, profilePost, items[]}
 
@@ -62,6 +65,54 @@ PLATFORM_TO_BUNDLE = {
 }
 
 BUNDLE_TO_PLATFORM = {value: key for key, value in PLATFORM_TO_BUNDLE.items() if key != "x"}
+
+# Per-platform shape of ``data.<PLATFORM>``, read off the live API's own Zod
+# validator on 2026-09-10 by posting deliberately wrong types and recording which
+# fields it named (AGENTS.md rule 14 - the published docs describe none of this):
+#
+#   YOUTUBE    text* description type('VIDEO'|'SHORT') madeForKids uploadIds
+#   INSTAGRAM  text  type('POST'|'REEL'|'STORY') altText shareToFeed
+#              collaborators carouselItems uploadIds
+#   TIKTOK     text  type('VIDEO'|'IMAGE') autoAddMusic uploadIds
+#   FACEBOOK   text  type('POST'|'REEL'|'STORY') link uploadIds
+#   LINKEDIN   text  link uploadIds
+#
+# (*) The one that had been costing every YouTube publication: for YOUTUBE
+# ``text`` is the video TITLE - capped at 100 characters, exactly YouTube's own
+# title limit - and the description body belongs in ``description``. Sending the
+# caption as ``text`` produced
+#   {"code":"custom","message":"Max 100 characters allowed",
+#    "path":["data","YOUTUBE","text"]}
+# on every attempt, while the title we did send travelled under a "title" key
+# that is not in the schema at all and was silently discarded.
+YOUTUBE_TITLE_MAX_CHARS = 100
+YOUTUBE_DESCRIPTION_MAX_CHARS = 5000
+
+# Maximum ``data.<PLATFORM>.text`` length the provider enforces, each read from
+# its own rejection message ("Max N characters allowed") on 2026-09-10. FACEBOOK
+# accepted 20 000 characters without complaint and is therefore deliberately
+# absent rather than given an invented ceiling.
+PLATFORM_TEXT_MAX_CHARS = {
+    "YOUTUBE": YOUTUBE_TITLE_MAX_CHARS,  # the title - see above
+    "INSTAGRAM": 2200,
+    "TIKTOK": 2200,
+    "LINKEDIN": 3000,
+}
+
+
+def _clip(value: str, max_chars: int) -> str:
+    """
+    Shorten to the provider's ceiling, marking the cut so a truncated field reads
+    as truncated rather than as a sentence that simply stops.
+
+    Used only for values we derive ourselves (a YouTube title built from the
+    caption). Text an administrator actually wrote is never silently shortened -
+    campaign_resolver rejects that target before launch with a message naming the
+    limit, which is a thing they can act on.
+    """
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 1].rstrip() + "\u2026"
 
 
 class ProductionBundleSocialClient(BaseBufferClient):
@@ -262,11 +313,31 @@ class ProductionBundleSocialClient(BaseBufferClient):
         equivalent signal. campaign_resolver excludes Instagram personal profiles
         proactively (they can never publish via API - a Meta rule, not ours), and
         that guard must keep working for channels from this provider too.
+
+        Instagram is always reported as publishable here, whichever of the two
+        connection methods was used. That is a correction, not a relaxation: this
+        method used to call anything but ``instagramConnectionMethod ==
+        "FACEBOOK"`` a personal profile, which took every Instagram account
+        connected the other way and had campaign_resolver reject it before a
+        single call was made - the reason Instagram "required a Facebook Page"
+        here while the same accounts had published fine through Buffer.
+
+        Meta offers two publishing integrations and bundle.social reports which
+        one the account came through:
+
+          FACEBOOK   Instagram Graph API - Business/Creator linked to a Page.
+          INSTAGRAM  Instagram API with Instagram Login - Business/Creator
+                     authorising directly, no Page involved. Introduced by Meta
+                     in 2024 and equally able to publish.
+
+        Neither can be completed by a personal profile: Meta's OAuth simply
+        refuses one, so an account that reached this method is Business/Creator
+        by construction. Verified against this deployment's own teams on
+        2026-09-10 - three live accounts (mamifyofficial, johanagomez109,
+        negro.marco1) all report ``instagramConnectionMethod: "INSTAGRAM"``.
         """
         if account.get("type") == "INSTAGRAM":
-            # Connected through Facebook = a Business/Creator account linked to a
-            # Page, which is exactly the configuration Meta allows publishing on.
-            return "business" if account.get("instagramConnectionMethod") == "FACEBOOK" else "profile"
+            return "business"
         if account.get("type") == "FACEBOOK":
             return "page"
         return None
@@ -409,9 +480,23 @@ class ProductionBundleSocialClient(BaseBufferClient):
             platform_data["uploadIds"] = [self.ensure_upload(api_key, media_url)]
 
         if bundle_type == "YOUTUBE":
-            # YouTube needs a real title; falling back to the text would produce
-            # a video titled with the whole caption.
-            platform_data["title"] = youtube_title or (text[:95] if text else "Video")
+            # For YOUTUBE the provider's "text" IS the title (max 100 chars) and
+            # the caption belongs in "description" - see PLATFORM_TEXT_MAX_CHARS
+            # above for how that was established. Both fields are written here
+            # explicitly, overwriting the generic {"text": text} set above, so
+            # neither can be left holding the other one's value.
+            #
+            # The title is truncated rather than rejected: it is derived from the
+            # caption whenever the campaign has no youtube_title of its own, and
+            # a caption is routinely longer than 100 characters. An administrator
+            # who cares about the exact wording sets youtube_title (capped at 100
+            # by the campaign schema, so never truncated here); an administrator
+            # who does not still gets a published video with a sensible title
+            # instead of a permanent failure.
+            platform_data["text"] = _clip(
+                youtube_title or text or "Video", YOUTUBE_TITLE_MAX_CHARS
+            )
+            platform_data["description"] = _clip(text or "", YOUTUBE_DESCRIPTION_MAX_CHARS)
         if bundle_type == "INSTAGRAM":
             # Same rule the Buffer client applies: a video over a minute cannot
             # be a feed post, only a reel.
@@ -431,7 +516,10 @@ class ProductionBundleSocialClient(BaseBufferClient):
             "data": {bundle_type: platform_data},
         }
 
-        result = self._request(api_key, "POST", "/post/", json_body=body)
+        try:
+            result = self._request(api_key, "POST", "/post/", json_body=body)
+        except BufferApiError as exc:
+            raise self._explain_rejection(exc, bundle_type) from exc
 
         # A 200 does not mean every platform accepted it: per-platform failures
         # come back in `errors`, so surface them instead of reporting success.
@@ -450,6 +538,37 @@ class ProductionBundleSocialClient(BaseBufferClient):
             "status": result.get("status"),
             "provider": "bundle_social",
         }
+
+    @staticmethod
+    def _explain_rejection(error: BufferApiError, bundle_type: str) -> BufferApiError:
+        """
+        Replace a raw provider rejection with something an administrator can act
+        on, where we recognise it.
+
+        The provider answers a validation failure with a Zod dump - useful when
+        debugging the integration, unreadable on the Errori page, and in one case
+        actively misleading. "No social accounts selected" sounds like a mistake
+        in the request; it actually means the team no longer holds an account of
+        this platform, i.e. our copy of the channel outlived the connection
+        upstream (observed 2026-09-08 on a LinkedIn channel the user had already
+        disconnected). Retrying cannot fix that, so it is reported for what it is
+        - a channel to reconnect - rather than left looking like a transient
+        request problem.
+
+        Anything unrecognised is passed through untouched: inventing an
+        explanation for an error we have not seen would be worse than the dump.
+        """
+        raw = error.message or ""
+        if "No social accounts selected" in raw:
+            return BufferApiError(
+                f"Il canale {bundle_type.title()} non risulta piu collegato: "
+                "l'account non e presente nello spazio dell'utente. "
+                "L'utente deve ricollegarlo dal portale perche questa campagna "
+                "possa raggiungerlo.",
+                status_code=error.status_code,
+                category="channel_disconnected",
+            )
+        return error
 
     def get_post_status(self, api_key: str, external_post_id: str) -> Dict[str, Any]:
         result = self._request(api_key, "GET", f"/post/{external_post_id}")

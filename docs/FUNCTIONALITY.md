@@ -21,6 +21,7 @@ Il modulo **Statistiche** (dashboard persistita delle metriche Buffer per promot
 4-bis. [Provider di pubblicazione (Buffer e non solo)](#4-bis-provider-di-pubblicazione-buffer-e-non-solo)
 4-ter. [Portale utenti finali](#4-ter-portale-utenti-finali)
 5. [Campagne: targeting e testo](#5-campagne-targeting-e-testo)
+5-bis. [Palinsesto: campagne ad adesione (opt-out)](#5-bis-palinsesto-campagne-ad-adesione-opt-out)
 6. [Ciclo di vita di una pubblicazione](#6-ciclo-di-vita-di-una-pubblicazione)
 7. [Rate limiting verso Buffer](#7-rate-limiting-verso-buffer)
 8. [Task in background (Celery)](#8-task-in-background-celery)
@@ -160,6 +161,54 @@ Due differenze rispetto a Buffer, da tenere presenti:
 2. **Non esiste "pubblica adesso"**: lo stato e' `DRAFT` o `SCHEDULED`, quindi una
    pubblicazione immediata viene programmata all'istante corrente.
 
+### Forma di `data.<PIATTAFORMA>`: verificata, non documentata
+
+bundle.social non pubblica lo schema del corpo di un post. La tabella sotto e'
+stata ricavata il 2026-09-10 interrogando il suo validatore: inviando valori del
+tipo sbagliato e registrando quali campi nominava nell'errore. Le lunghezze
+massime vengono dai suoi stessi messaggi di rifiuto ("Max N characters allowed").
+
+| Piattaforma | Campi | Limite di `text` |
+|---|---|---|
+| `YOUTUBE` | `text`* `description` `type`(`VIDEO`\|`SHORT`) `madeForKids` `uploadIds` | **100** |
+| `INSTAGRAM` | `text` `type`(`POST`\|`REEL`\|`STORY`) `altText` `shareToFeed` `collaborators` `carouselItems` `uploadIds` | 2200 |
+| `TIKTOK` | `text` `type`(`VIDEO`\|`IMAGE`) `autoAddMusic` `uploadIds` | 2200 |
+| `LINKEDIN` | `text` `link` `uploadIds` | 3000 |
+| `FACEBOOK` | `text` `type`(`POST`\|`REEL`\|`STORY`) `link` `uploadIds` | nessuno riscontrato |
+
+(*) **Per YouTube `text` e' il titolo del video, non la descrizione.** E' la
+trappola che faceva fallire ogni pubblicazione YouTube: il client mandava la
+caption intera in `text` — rifiutata con `Max 100 characters allowed` — e il
+titolo sotto una chiave `title` che nello schema non esiste e veniva scartata in
+silenzio. La descrizione va in `description` (max 5000).
+
+Queste soglie sono replicate in `PLATFORM_TEXT_LIMITS` (`campaign_resolver.py`),
+cosi' un testo troppo lungo viene fermato al lancio — quando e' ancora
+modificabile — invece di tornare come dump Zod nella pagina Errori. Le due
+tabelle vanno tenute allineate.
+
+### Instagram: nessuna Pagina Facebook richiesta
+
+Meta offre **due** integrazioni per pubblicare, e bundle.social riporta da quale
+l'account e' arrivato in `instagramConnectionMethod`:
+
+| Valore | Significato |
+|---|---|
+| `FACEBOOK` | Instagram Graph API — account Business/Creator collegato a una Pagina |
+| `INSTAGRAM` | Instagram API with Instagram Login — Business/Creator che autorizza direttamente, senza Pagina (introdotta da Meta nel 2024) |
+
+Entrambe pubblicano. Nessuna delle due puo' essere completata da un profilo
+personale: l'OAuth di Meta lo rifiuta, quindi un account che ha finito il
+collegamento e' Professional per costruzione.
+
+Fino al 2026-09-10 `_channel_type` classificava come `"profile"` tutto cio' che
+non fosse `FACEBOOK`, e `campaign_resolver` scarta i profili personali prima di
+fare qualsiasi chiamata. Poiche' **tutti** gli account Instagram reali di questo
+deployment si collegano con il secondo metodo, ognuno di essi veniva rifiutato
+per una limitazione che non esiste — ed e' il motivo per cui Instagram sembrava
+"richiedere una Pagina Facebook" qui mentre gli stessi account pubblicavano
+senza problemi tramite Buffer.
+
 ### Parita' delle statistiche: quasi completa
 
 Mappatura verificata sullo schema reale:
@@ -279,6 +328,57 @@ Credenziali: la chiave API OpenAI è **configurabile dalla pagina Impostazioni**
 - **Ripresa**: le rimette `pending` e ridà la sveglia al task di poll.
 - **Annullamento**: cancella la campagna e ogni pubblicazione non ancora terminale — irreversibile.
 - **Eliminazione** (`DELETE /campaigns/{id}`): cancella *tutto* in cascata (target, pubblicazioni, tentativi), scrive prima un audit log, funziona anche se la campagna è già stata pubblicata su alcuni canali. Il media allegato **non** viene eliminato (può essere riusato da altre campagne).
+
+---
+
+## 5-bis. Palinsesto: campagne ad adesione (opt-out)
+
+### Il problema
+
+Lanciare una campagna è il passo irreversibile. Una campagna programmata consegna al provider **ogni post con la sua data** nel momento in cui viene lanciata: da lì in poi un promoter che dice "questa preferirei saltarla" non è più una cosa che possiamo onorare senza cancellare post dal suo profilo reale. Prima di questa funzionalità una campagna aveva due soli stati — bozza privata, oppure già inviata — e niente in mezzo.
+
+### Il flusso
+
+`Campaign.participation_mode = "opt_out"` aggiunge lo stato intermedio:
+
+```
+draft ──annuncia──> announced ──lancia──> queued ──> ... ──> completed
+                        │
+                        └─ la finestra: i partecipanti vedono la campagna,
+                           il suo testo e il suo media, e possono togliere
+                           i propri canali. Nulla è stato inviato.
+```
+
+1. L'amministratore crea la campagna scegliendo "Con adesione (palinsesto)", una **scadenza** per il ritiro e se allo scadere la campagna debba **partire da sola** o restare ferma in attesa del pulsante Lancia. Le due cose sono decisioni separate: `opt_out_deadline_at` chiude la finestra, `auto_launch_at_deadline` decide chi preme il grilletto.
+2. `POST /campaigns/{id}/announce` risolve i destinatari e crea una riga in `campaign_participants` per ogni canale. La campagna passa in `announced`. **Nessuna chiamata al provider.**
+3. Ogni utente vede la campagna nel proprio portale (`/portal/lineup`), può aprirla, leggere il testo e il media, e togliersi con un click — o aggiungere altri propri canali.
+4. Al lancio (manuale o automatico) `launch_campaign` pubblica **verso il palinsesto**, non verso il targeting ricalcolato.
+
+### Due regole che spiegano tutto il resto
+
+**Il palinsesto è una fotografia.** Viene risolto una volta sola, all'annuncio. Un canale collegato durante la finestra non entra di nascosto: non ha mai avuto modo di ritirarsi, e includerlo tradirebbe la promessa che la finestra stessa fa. Il proprietario può però aggiungerlo lui — che è una decisione, non un incidente.
+
+**Nulla viene cancellato.** Ritirarsi cambia uno `status`. Lo storico di quali campagne un promoter si è visto proporre e quali ha rifiutato è il motivo per cui `campaign_participants` esiste — ed è invisibile in `campaign_targets`, dove un rifiuto giustamente non lascia alcuna riga.
+
+### Il palinsesto è pubblico
+
+`GET /portal/lineup` restituisce **tutte** le campagne aperte, comprese quelle in cui l'utente non è stato inserito. È deliberato: un promoter escluso da una campagna a cui avrebbe voluto partecipare non ha altro modo di scoprirlo, e chiedere all'amministratore di accorgersene e aggiungerlo a mano è esattamente il lavoro manuale che questa funzionalità elimina. L'adesione è immediata, senza approvazione; l'amministratore la vede nel pannello partecipanti, marcata come "aggiunto da sé", e può escluderla.
+
+Un canale escluso da un amministratore (`status='removed'`) **non** può essere reinserito dal proprietario: altrimenti l'esclusione sarebbe inapplicabile.
+
+### Endpoint
+
+| Metodo | Percorso | Chi | Cosa fa |
+|---|---|---|---|
+| `POST` | `/campaigns/{id}/announce` | admin | pubblica il palinsesto, apre la finestra, non invia nulla |
+| `GET` | `/campaigns/{id}/lineup` | admin | chi partecipa, chi si è ritirato, chi si è aggiunto da solo |
+| `DELETE` | `/campaigns/{id}/lineup/{participant_id}` | admin | esclude un canale (`removed`, non `withdrawn`) |
+| `GET` | `/portal/lineup` | utente | tutte le campagne aperte, con la propria posizione in ciascuna |
+| `GET` | `/portal/lineup/{id}` | utente | testo, media, date, i propri canali e il loro stato |
+| `POST` | `/portal/lineup/{id}/withdraw` | utente | toglie i propri canali (tutti, o quelli indicati) |
+| `POST` | `/portal/lineup/{id}/join` | utente | aggiunge i propri canali |
+
+Il codice sta in `services/campaign_participation.py`; i test in `tests/services/test_campaign_participation.py`.
 
 ---
 

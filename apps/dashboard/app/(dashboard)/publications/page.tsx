@@ -149,7 +149,7 @@ export default function PublicationsPage() {
               ) : (
                 "—"
               )}
-              <span className="text-[10px] text-muted-foreground">ID Buffer: {row.original.external_channel_id}</span>
+              <span className="text-[10px] text-muted-foreground">ID canale: {row.original.external_channel_id}</span>
             </div>
           );
         },

@@ -14,7 +14,7 @@ export const METRIC_TILE_CONFIG: { type: string; label: string; shortLabel: stri
   { type: "reach", label: "Copertura (persone raggiunte)", shortLabel: "Copertura", icon: EyeIcon },
   { type: "follows", label: "Nuovi iscritti", shortLabel: "Iscritti", icon: UserPlusIcon },
   { type: "clicks", label: "Clic", shortLabel: "Clic", icon: MousePointerClickIcon },
-  { type: "engagementRate", label: "Tasso di coinvolgimento (Buffer)", shortLabel: "Coinvolgimento", icon: PercentIcon },
+  { type: "engagementRate", label: "Tasso di coinvolgimento", shortLabel: "Coinvolgimento", icon: PercentIcon },
   { type: "comments", label: "Commenti", shortLabel: "Commenti", icon: BarChart3Icon },
   { type: "shares", label: "Condivisioni", shortLabel: "Condivisioni", icon: BarChart3Icon },
 ];

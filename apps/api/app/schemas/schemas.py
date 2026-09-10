@@ -268,6 +268,13 @@ class CampaignCreate(BaseModel):
     # the referral link (see campaign_resolver.py).
     include_personal_contacts: bool = False
     include_affiliate_disclosure: bool = False
+    # "automatic" (default, unchanged behaviour) or "opt_out": announce the
+    # line-up to its participants first and give them a window to withdraw
+    # before anything reaches the provider. See models/campaign.py.
+    participation_mode: str = "automatic"
+    # Only meaningful with participation_mode="opt_out".
+    opt_out_deadline_at: Optional[datetime] = None
+    auto_launch_at_deadline: bool = False
 
 class CampaignResponse(BaseModel):
     id: uuid.UUID
@@ -292,6 +299,10 @@ class CampaignResponse(BaseModel):
     # reproduce the same recipient selection when duplicating a campaign.
     metadata_json: Optional[Dict[str, Any]] = None
     status: str
+    participation_mode: str = "automatic"
+    announced_at: Optional[datetime] = None
+    opt_out_deadline_at: Optional[datetime] = None
+    auto_launch_at_deadline: bool = False
     media_file_id: Optional[uuid.UUID]
     # Same attribute name as the Campaign.media_file SQLAlchemy relationship,
     # so from_attributes resolves it automatically - used for the small
@@ -313,6 +324,60 @@ class CampaignPreviewResponse(BaseModel):
     channels_requiring_notification_approval: int
     excluded_channels_count: int
     total_active_users: int
+
+class PlatformSettingsResponse(BaseModel):
+    """Admin-configurable platform behaviour (see models/platform_settings.py)."""
+    affiliate_disclosure_text: str
+    affiliate_disclosure_text_short: str
+    auto_activate_new_users: bool
+
+
+class PlatformSettingsUpdateRequest(BaseModel):
+    affiliate_disclosure_text: Optional[str] = Field(default=None, max_length=500)
+    affiliate_disclosure_text_short: Optional[str] = Field(default=None, max_length=120)
+    auto_activate_new_users: Optional[bool] = None
+
+
+class CampaignParticipantResponse(BaseModel):
+    """One channel's standing in an announced campaign, for the admin panel."""
+    id: uuid.UUID
+    user_id: uuid.UUID
+    user_name: str
+    social_channel_id: uuid.UUID
+    channel_name: str
+    platform: str
+    # included | withdrawn | removed  (models/campaign.py CampaignParticipant)
+    status: str
+    # admin | user - "user" marks someone who joined the campaign themselves,
+    # which is the thing an administrator most wants to spot in this list.
+    added_by: str
+    decided_at: Optional[datetime] = None
+    decided_reason: Optional[str] = None
+
+
+class CampaignLineupResponse(BaseModel):
+    campaign_id: uuid.UUID
+    status: str
+    participation_mode: str
+    announced_at: Optional[datetime]
+    opt_out_deadline_at: Optional[datetime]
+    auto_launch_at_deadline: bool
+    window_open: bool
+    included_count: int
+    withdrawn_count: int
+    removed_count: int
+    participants: List[CampaignParticipantResponse]
+
+
+class CampaignAnnounceRequest(BaseModel):
+    targeting_params: Dict[str, Any] = Field(default_factory=dict)
+    # Until when participants may withdraw. None keeps the window open until the
+    # administrator launches the campaign.
+    opt_out_deadline_at: Optional[datetime] = None
+    # True: the campaign launches itself once the deadline passes. False: the
+    # deadline only closes the window and the campaign waits for Launch.
+    auto_launch_at_deadline: bool = False
+
 
 class CampaignDetailResponse(BaseModel):
     campaign: CampaignResponse

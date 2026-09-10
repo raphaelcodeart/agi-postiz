@@ -10,7 +10,7 @@ import { targetingModeValues, type CampaignWizardValues } from "@/lib/validation
 const MODE_LABELS: Record<(typeof targetingModeValues)[number], { label: string; description: string }> = {
   all_active_channels: {
     label: "Tutti i canali attivi",
-    description: "Pubblica su tutti i canali social attivi con connessione Buffer valida.",
+    description: "Pubblica su tutti i canali social attivi con una connessione valida.",
   },
   selected_users: { label: "Utenti selezionati", description: "Scegli manualmente uno o più utenti." },
   selected_groups: { label: "Gruppi selezionati", description: "Scegli uno o più gruppi di utenti." },

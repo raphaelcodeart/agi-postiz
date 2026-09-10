@@ -1,5 +1,7 @@
 import time
 from datetime import datetime, timezone
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 import redis
 from sqlalchemy import text
@@ -11,7 +13,14 @@ from app.models.ai_settings import AISettings
 from app.core.config import settings
 from app.core.security import EncryptionService
 from app.integrations.openai.client import validate_api_key
+from app.models.platform_settings import (
+    DEFAULT_AFFILIATE_DISCLOSURE,
+    DEFAULT_AFFILIATE_DISCLOSURE_SHORT,
+    PlatformSettings,
+)
 from app.schemas.schemas import (
+    PlatformSettingsResponse,
+    PlatformSettingsUpdateRequest,
     SystemSettingsResponse,
     SystemSettingsUpdate,
     HealthResponse,
@@ -172,3 +181,72 @@ def health_check(db: Session = Depends(get_db)):
         celery_worker=celery_status,
         timestamp=datetime.now(timezone.utc)
     )
+
+
+# --------------------------------------------------------------------------
+# Platform behaviour
+# --------------------------------------------------------------------------
+
+def _platform_settings_row(db: Session) -> PlatformSettings:
+    """
+    The singleton row, created on first write.
+
+    Reads never create it: a GET that writes turns opening a page into a
+    migration, and the defaults below already describe what an absent row means.
+    """
+    row = db.query(PlatformSettings).first()
+    if row is None:
+        row = PlatformSettings()
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def _platform_settings_payload(row: Optional[PlatformSettings]) -> PlatformSettingsResponse:
+    return PlatformSettingsResponse(
+        affiliate_disclosure_text=(row.affiliate_disclosure_text if row else None)
+        or DEFAULT_AFFILIATE_DISCLOSURE,
+        affiliate_disclosure_text_short=(row.affiliate_disclosure_text_short if row else None)
+        or DEFAULT_AFFILIATE_DISCLOSURE_SHORT,
+        auto_activate_new_users=bool(row.auto_activate_new_users) if row else True,
+    )
+
+
+@router.get("/platform", response_model=PlatformSettingsResponse)
+def get_platform_settings(
+    db: Session = Depends(get_db),
+    admin: Administrator = Depends(get_current_admin),
+):
+    """
+    Platform-wide behaviour an administrator can change without a deploy.
+
+    Returns the effective values, defaults included, so the form always shows
+    what is actually in force rather than empty boxes that mean "something else
+    applies".
+    """
+    return _platform_settings_payload(db.query(PlatformSettings).first())
+
+
+@router.put("/platform", response_model=PlatformSettingsResponse)
+def update_platform_settings(
+    payload: PlatformSettingsUpdateRequest,
+    db: Session = Depends(get_db),
+    admin: Administrator = Depends(get_current_admin),
+):
+    """
+    Partial update: only the fields present in the body are written, so a form
+    that edits one setting cannot blank the others.
+    """
+    row = _platform_settings_row(db)
+
+    if payload.affiliate_disclosure_text is not None:
+        row.affiliate_disclosure_text = payload.affiliate_disclosure_text.strip() or None
+    if payload.affiliate_disclosure_text_short is not None:
+        row.affiliate_disclosure_text_short = payload.affiliate_disclosure_text_short.strip() or None
+    if payload.auto_activate_new_users is not None:
+        row.auto_activate_new_users = payload.auto_activate_new_users
+
+    db.commit()
+    db.refresh(row)
+    return _platform_settings_payload(row)

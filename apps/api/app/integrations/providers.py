@@ -41,9 +41,13 @@ PROVIDER_BUNDLE_SOCIAL = "bundle_social"
 SUPPORTED_PROVIDERS = (PROVIDER_BUFFER, PROVIDER_BUNDLE_SOCIAL)
 
 # Human-readable labels for the dashboard's channel origin badge.
+# Shown to end users in the portal and to administrators in the connections
+# list. Our own provider carries the product name; the Buffer label keeps the
+# service's real name because this map's whole job is to tell the two apart -
+# calling both "Agi Post" would make the column it fills meaningless.
 PROVIDER_LABELS = {
-    PROVIDER_BUFFER: "Buffer",
-    PROVIDER_BUNDLE_SOCIAL: "Collegato da noi",
+    PROVIDER_BUFFER: "Buffer (legacy)",
+    PROVIDER_BUNDLE_SOCIAL: "Agi Post",
 }
 
 
@@ -101,7 +105,7 @@ def _resolve_api_key(provider: str, connection: "BufferConnection") -> str:
         token = EncryptionService.decrypt(connection.access_token_encrypted) if connection.access_token_encrypted else None
         if not token:
             raise BufferApiError(
-                "Credenziali mancanti: la connessione Buffer va ricollegata.",
+                "Credenziali mancanti: la connessione va ricollegata.",
                 category="auth_error",
             )
         return token

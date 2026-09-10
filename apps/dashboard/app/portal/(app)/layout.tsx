@@ -40,10 +40,16 @@ export default async function PortalAppLayout({ children }: { children: React.Re
               Canali
             </Link>
             <Link
+              href="/portal/lineup"
+              className="text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Palinsesto
+            </Link>
+            <Link
               href="/portal/campaigns"
               className="text-muted-foreground transition-colors hover:text-foreground"
             >
-              Campagne
+              Storico
             </Link>
           </nav>
 

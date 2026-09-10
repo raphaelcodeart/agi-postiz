@@ -20,7 +20,12 @@ import {
   toCampaignCreatePayload,
   type CampaignWizardValues,
 } from "@/lib/validation/campaigns";
-import { useCreateCampaign, useLaunchCampaign, useCampaignDetail } from "@/hooks/use-campaigns";
+import {
+  useAnnounceCampaign,
+  useCampaignDetail,
+  useCreateCampaign,
+  useLaunchCampaign,
+} from "@/hooks/use-campaigns";
 import { ApiError } from "@/lib/api/errors";
 import { BLOG_WRITER_PREFILL_KEY, type BlogWriterCampaignPrefill } from "@/lib/blog-writer-prefill";
 import { WizardStepper } from "./_components/wizard-stepper";
@@ -68,10 +73,14 @@ function NewCampaignForm() {
       publishing_mode: "immediate",
       scheduled_at: null,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      participation_mode: "automatic",
+      opt_out_deadline_at: null,
+      auto_launch_at_deadline: false,
     },
   });
 
   const launchCampaign = useLaunchCampaign();
+  const announceCampaign = useAnnounceCampaign();
 
   // Real progress isn't available during create+launch (both are quick DB writes
   // that just dispatch background jobs, not the actual per-channel Buffer calls -
@@ -172,6 +181,30 @@ function NewCampaignForm() {
     try {
       creepTo(8, 45, "Creazione campagna...");
       const campaign = await createCampaign.mutateAsync(toCampaignCreatePayload(values));
+
+      // An opt-out campaign is announced, never launched from here. Launching is
+      // what sends every post to the provider; the whole point of this mode is
+      // that the people in it get to see the campaign first.
+      if (values.participation_mode === "opt_out") {
+        creepTo(45, 95, "Pubblicazione del palinsesto...");
+        await announceCampaign.mutateAsync({
+          campaignId: campaign.id,
+          payload: {
+            targeting_params: buildTargetingParams(values),
+            opt_out_deadline_at: values.opt_out_deadline_at
+              ? new Date(values.opt_out_deadline_at).toISOString()
+              : null,
+            auto_launch_at_deadline: values.auto_launch_at_deadline,
+          },
+        });
+        stopCreep();
+        setLaunchProgress({ value: 100, label: "Campagna in palinsesto" });
+        toast.success(
+          "Campagna in palinsesto: i destinatari possono vederla e ritirarsi. Nessun post e stato inviato."
+        );
+        router.push(`/campaigns/${campaign.id}`);
+        return;
+      }
 
       if (values.publishing_mode === "draft") {
         stopCreep();

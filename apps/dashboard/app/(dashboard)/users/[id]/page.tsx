@@ -109,7 +109,7 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
 
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle className="text-base">Connessioni Buffer</CardTitle>
+            <CardTitle className="text-base">Connessioni account</CardTitle>
           </CardHeader>
           <CardContent>
             {userConnections.length > 0 ? (
@@ -117,7 +117,7 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
                 {userConnections.map((connection) => (
                   <li key={connection.id} className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0">
                     <div>
-                      <p className="text-sm font-medium">{connection.external_account_id ?? "Account Buffer"}</p>
+                      <p className="text-sm font-medium">{connection.external_account_id ?? "Account collegato"}</p>
                       <p className="text-xs text-muted-foreground">
                         Ultima sincronizzazione: {formatDateTime(connection.last_sync_at)}
                       </p>
@@ -127,7 +127,7 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
                 ))}
               </ul>
             ) : (
-              <EmptyState title="Nessuna connessione Buffer" description="Questo utente non ha ancora collegato un account Buffer." />
+              <EmptyState title="Nessuna connessione" description="Questo utente non ha ancora collegato nessun account." />
             )}
           </CardContent>
         </Card>

@@ -54,7 +54,7 @@ export function ConnectUserDialog({ open, onOpenChange, preselectedUserId }: Con
       { userId, apiKey: apiKey.trim() },
       {
         onSuccess: () => {
-          toast.success("Account Buffer collegato");
+          toast.success("Account collegato");
           onOpenChange(false);
         },
         onError: (error) => {
@@ -68,11 +68,12 @@ export function ConnectUserDialog({ open, onOpenChange, preselectedUserId }: Con
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>Collega account Buffer</DialogTitle>
+          <DialogTitle>Collega un account Buffer esistente</DialogTitle>
           <DialogDescription>
-            Chiedi all&apos;utente di generare una chiave API personale dal proprio account
-            Buffer (Settings → API) e incollala qui sotto. Non serve nessun accesso o
-            autorizzazione su Buffer da parte tua.
+            Solo per utenti che hanno già un account sul servizio esterno Buffer: normalmente
+            i canali si collegano da soli dal portale. Chiedi all&apos;utente di generare una
+            chiave API personale dal proprio account su publish.buffer.com (Settings → API) e
+            incollala qui sotto.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">

@@ -53,6 +53,54 @@ export type PortalCampaign = {
   published: number;
   failed: number;
   pending: number;
+  /**
+   * How this user relates to the campaign. A campaign they declined has no
+   * targets and no publications at all, so without this it would be invisible
+   * in their history - which is precisely the record they need to be able to
+   * check.
+   */
+  participation_included: number;
+  participation_withdrawn: number;
+  /** Taken out by an administrator, not by the user - shown differently. */
+  participation_removed: number;
+};
+
+/** One of the user's channels, and where it stands in a given campaign. */
+export type PortalLineupChannel = {
+  id: string;
+  platform: string;
+  name: string;
+  username: string | null;
+  avatar_url: string | null;
+  /** included | withdrawn | removed | null (never in the line-up) */
+  participation_status: "included" | "withdrawn" | "removed" | null;
+  joined_by_me: boolean;
+  decided_at: string | null;
+  /** False when an administrator removed it: the user may not put it back. */
+  can_rejoin: boolean;
+};
+
+/**
+ * A campaign in the line-up: announced, not yet sent, and open for the user to
+ * join or leave.
+ */
+export type PortalLineupCampaign = {
+  id: string;
+  title: string;
+  status: string;
+  text: string;
+  media_url: string | null;
+  media_type: "image" | "video" | null;
+  scheduled_at: string | null;
+  timezone: string;
+  opt_out_deadline_at: string | null;
+  window_open: boolean;
+  auto_launch_at_deadline: boolean;
+  announced_at: string | null;
+  channels: PortalLineupChannel[];
+  included_count: number;
+  withdrawn_count: number;
+  can_join: boolean;
 };
 
 export type PortalOverview = {

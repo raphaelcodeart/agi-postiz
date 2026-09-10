@@ -11,6 +11,25 @@ from app.models.media import MediaFile
 from app.models.publication import Publication
 from app.models.audit import AuditLog
 
+# X/Twitter arrives under either name. Buffer's API reports "twitter" and every
+# per-platform table in this file is keyed that way, but a channel synced from
+# bundle.social - or a "selected_platforms" campaign where an administrator typed
+# the modern name - can carry "x". Every lookup goes through this, so a table
+# only ever needs the one key.
+#
+# This is not hypothetical: compute_video_duration_validation_error("x", ...)
+# returned None for a 180s video, silently skipping the 140s X/Twitter limit that
+# the table exists to enforce. Two tests asserted the correct behaviour and had
+# been failing on main since the check was written.
+PLATFORM_ALIASES = {"x": "twitter"}
+
+
+def platform_key(platform: str) -> str:
+    """Canonical internal name for a platform, case- and alias-insensitive."""
+    key = (platform or "").lower().strip()
+    return PLATFORM_ALIASES.get(key, key)
+
+
 # Hard per-platform text limits enforced by Buffer itself. Mirrors the max_length
 # already validated on CampaignCreateRequest.x_text/threads_text (schemas.py) - but
 # that only bounds the *override* field. When no override is set, resolve_text_for_channel
@@ -21,7 +40,31 @@ from app.models.audit import AuditLog
 # service/platform="twitter" (see prod_client.py list_channels), never "x", confirmed
 # against this deployment's production data (2026-08-11). Using "x" here silently
 # disabled this check for every real X/Twitter channel - see resolve_text_for_channel.
-PLATFORM_TEXT_LIMITS = {"twitter": 280, "threads": 500}
+PLATFORM_TEXT_LIMITS = {
+    "twitter": 280,
+    "threads": 500,
+    # Added 2026-09-10, each read from bundle.social's own rejection message
+    # ("Max N characters allowed") by posting an over-long caption and recording
+    # what came back - the same source as PLATFORM_TEXT_MAX_CHARS in
+    # integrations/bundle_social/prod_client.py, which must stay in step with
+    # this table. They are platform ceilings rather than provider ones (2200 is
+    # Instagram's own caption limit, 3000 LinkedIn's), so they hold for Buffer
+    # channels too.
+    #
+    # Before this, a caption over the limit was not caught anywhere: the target
+    # was created, dispatched, and rejected by the provider several seconds
+    # later with a Zod dump on the Errori page. Now the administrator is told at
+    # launch, while the text is still editable.
+    "instagram": 2200,
+    "tiktok": 2200,
+    "linkedin": 3000,
+    # For YouTube the resolved text is the video DESCRIPTION (see
+    # resolve_text_for_channel); the title is carried separately as
+    # campaign.youtube_title and capped at 100 by the campaign schema itself.
+    "youtube": 5000,
+    # Facebook is absent on purpose: it accepted 20 000 characters when probed,
+    # so there is no verified ceiling to enforce (AGENTS.md rule 14).
+}
 
 # Hard per-platform video-duration limit enforced by Buffer's own documented specs
 # (support.buffer.com/article/616, "Sharing videos through Buffer": "X/Twitter videos
@@ -36,7 +79,7 @@ PLATFORM_TEXT_LIMITS = {"twitter": 280, "threads": 500}
 # equivalent branching yet and always publishes as a normal feed "post".
 PLATFORM_VIDEO_MAX_DURATION_SECONDS = {"twitter": 140.0}
 
-# Instagram channels Buffer reports with channel_type="profile" (a personal,
+# Instagram channels reported with channel_type="profile" (a personal,
 # non-Business/Creator account - value observed directly from Buffer's own API via
 # sync_buffer_connection, see models/buffer.py SocialChannel.channel_type) always
 # reject scheduled/immediate publishing with the same permanent error:
@@ -52,6 +95,15 @@ PLATFORM_VIDEO_MAX_DURATION_SECONDS = {"twitter": 140.0}
 # real fix is converting the Instagram account to Professional/Business and
 # reconnecting; SocialChannel.publication_mode="notification" is purely descriptive
 # in this codebase today (see api/v1/buffer.py), not wired to a distinct Buffer call.
+#
+# Only Buffer channels can reach this rule now. Channels connected through
+# bundle.social are always classified "business" (see that client's
+# _channel_type): both of Meta's publishing integrations refuse a personal
+# profile at the OAuth step, so an Instagram account that finished connecting is
+# Professional by construction. Until 2026-09-10 this file was rejecting those
+# accounts anyway, because the classification treated "connected without a
+# Facebook Page" as "personal" - which is what made Instagram look like it
+# required a Page here while the same accounts published fine through Buffer.
 CHANNEL_TYPES_REQUIRING_NOTIFICATION_SCHEDULING = {"instagram": {"profile"}}
 
 class CampaignResolver:
@@ -268,7 +320,7 @@ class CampaignResolver:
         if channel_override_text:
             text = channel_override_text
         else:
-            platform = channel.platform.lower().strip()
+            platform = platform_key(channel.platform)
             if platform == "instagram" and campaign.instagram_text:
                 text = campaign.instagram_text
             elif platform == "facebook" and campaign.facebook_text:
@@ -320,8 +372,8 @@ class CampaignResolver:
         rather than blocking the channel on missing data - Buffer's own live rejection
         remains the backstop for that case.
         """
-        platform_key = platform.lower().strip()
-        duration_limit = PLATFORM_VIDEO_MAX_DURATION_SECONDS.get(platform_key)
+        key = platform_key(platform)
+        duration_limit = PLATFORM_VIDEO_MAX_DURATION_SECONDS.get(key)
         if duration_limit is None or media_file is None:
             return None
         if not media_file.mime_type or "video" not in media_file.mime_type:
@@ -357,15 +409,15 @@ class CampaignResolver:
         instead of letting every affected target burn an API call and come back
         as a failed publication with a provider error string.
         """
-        platform_key = platform.lower().strip()
+        key = platform_key(platform)
 
-        if platform_key in cls.MEDIA_REQUIRED_PLATFORMS and media_file is None:
+        if key in cls.MEDIA_REQUIRED_PLATFORMS and media_file is None:
             return (
                 f"{platform.title()} non accetta post senza immagine o video. "
                 f"Aggiungi un media alla campagna oppure escludi i canali {platform.title()}."
             )
 
-        if platform_key in cls.VIDEO_ONLY_PLATFORMS and media_file is not None:
+        if key in cls.VIDEO_ONLY_PLATFORMS and media_file is not None:
             is_video = bool(media_file.mime_type) and "video" in media_file.mime_type
             if not is_video:
                 return (
@@ -387,18 +439,17 @@ class CampaignResolver:
         """
         if not channel_type:
             return None
-        platform_key = platform.lower().strip()
-        blocked_types = CHANNEL_TYPES_REQUIRING_NOTIFICATION_SCHEDULING.get(platform_key)
+        key = platform_key(platform)
+        blocked_types = CHANNEL_TYPES_REQUIRING_NOTIFICATION_SCHEDULING.get(key)
         if not blocked_types or channel_type.lower().strip() not in blocked_types:
             return None
 
         return (
             f"Canale {platform} di tipo \"{channel_type}\" (profilo personale, non Professional/Business): "
-            f"Instagram non permette la pubblicazione automatica su profili personali, solo su account "
-            f"Professional/Business collegati a una Pagina Facebook - Buffer rifiuta sempre questo tipo di "
-            f"pubblicazione con lo stesso errore permanente. Converti l'account in Professional/Business su "
-            f"Instagram e ricollegalo su Buffer per poterlo pubblicare da qui. Questo canale è escluso "
-            f"automaticamente; gli altri canali della campagna non sono influenzati."
+            f"Instagram non consente la pubblicazione automatica dai profili personali - solo gli account "
+            f"Professional (Business o Creator) hanno il permesso di pubblicare via API. Converti l'account "
+            f"in Professional dalle impostazioni di Instagram e ricollegalo dal portale. Questo canale è "
+            f"escluso automaticamente; gli altri canali della campagna non sono influenzati."
         )
 
     @classmethod
@@ -461,22 +512,43 @@ class CampaignResolver:
         if not campaign:
             raise ValueError(f"Campaign with ID {campaign_id} not found.")
 
-        if campaign.status not in ("draft", "failed", "paused"):
+        if campaign.status not in ("draft", "announced", "failed", "paused"):
             raise ValueError(f"Campaign is in status {campaign.status} and cannot be launched.")
 
+        was_announced = campaign.status == "announced"
         campaign.status = "preparing"
         db.flush()
 
-        # 2. Resolve target channels
-        channels = cls.resolve_targets(db, campaign, targeting_params)
+        # 2. Resolve target channels.
+        #
+        # An announced campaign publishes to its line-up, not to whatever
+        # targeting resolves to now - see services/campaign_participation.py. Two
+        # reasons it has to be the snapshot: a channel connected during the
+        # opt-out window never had the chance to withdraw, and a channel the
+        # owner volunteered may not match the targeting criteria at all.
+        from app.services.campaign_participation import (
+            MODE_OPT_OUT,
+            resolve_lineup_channels,
+        )
+
+        uses_lineup = campaign.participation_mode == MODE_OPT_OUT and campaign.announced_at is not None
+        if uses_lineup:
+            channels = resolve_lineup_channels(db, campaign)
+        else:
+            channels = cls.resolve_targets(db, campaign, targeting_params)
+
         if not channels:
-            campaign.status = "failed"
+            campaign.status = "announced" if was_announced else "failed"
             db.commit()
+            if uses_lineup:
+                raise ValueError(
+                    "Nessun canale rimasto in questa campagna: tutti i partecipanti "
+                    "si sono ritirati oppure i loro canali non sono piu collegati."
+                )
             # Say WHY, not just "none matched". The exclusion criteria are
             # invisible from the campaign screen - an administrator looking at
             # four healthy channels has no way to guess that their owners are
-            # still awaiting activation, which is the most common cause now that
-            # self-registered users start inactive by design.
+            # suspended, or that every channel is switched off.
             raise ValueError(cls._explain_no_targets(db))
 
         publications_created = []
@@ -501,9 +573,9 @@ class CampaignResolver:
             override_text = channel_overrides.get(str(chan.id))
             # Short disclosure where the character budget is tight (X allows 280,
             # and the full sentence would eat a fifth of the post).
-            platform_key = chan.platform.lower().strip()
+            key = platform_key(chan.platform)
             disclosure = disclosure_long
-            if disclosure_long and PLATFORM_TEXT_LIMITS.get(platform_key, 10_000) <= 500:
+            if disclosure_long and PLATFORM_TEXT_LIMITS.get(key, 10_000) <= 500:
                 disclosure = disclosure_short
 
             resolved_text = cls.resolve_text_for_channel(
@@ -513,7 +585,7 @@ class CampaignResolver:
 
             # Catch platform text-length violations here instead of letting them reach
             # Buffer as a wasted, confusing API call - see PLATFORM_TEXT_LIMITS above.
-            text_limit = PLATFORM_TEXT_LIMITS.get(chan.platform.lower().strip())
+            text_limit = PLATFORM_TEXT_LIMITS.get(key)
             validation_error = None
             if text_limit is not None and len(resolved_text) > text_limit:
                 validation_error = (

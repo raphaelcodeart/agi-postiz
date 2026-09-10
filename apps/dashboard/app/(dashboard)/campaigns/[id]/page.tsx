@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { LineupPanel } from "./_components/lineup-panel";
 import { PlatformBadge } from "@/components/shared/platform-badge";
 import { CampaignProgress } from "@/components/shared/campaign-progress";
 import { MediaPreview } from "@/components/shared/media-preview";
@@ -35,6 +36,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import {
   useCampaignDetail,
   useCampaignMetrics,
+  useLaunchCampaign,
   usePauseCampaign,
   useResumeCampaign,
   useCancelCampaign,
@@ -91,6 +93,7 @@ export default function CampaignDetailPage({ params }: { params: Promise<{ id: s
   const deleteCampaign = useDeleteCampaign();
   const retryPublication = useRetryPublication();
   const retryCampaignFailures = useRetryCampaignFailures();
+  const launchCampaign = useLaunchCampaign();
 
   function withToast(promise: Promise<unknown>, successMessage: string) {
     promise
@@ -111,7 +114,7 @@ export default function CampaignDetailPage({ params }: { params: Promise<{ id: s
                 {info && <PlatformBadge platform={info.platform} />}
                 <span>{info?.name ?? "Canale sconosciuto"}</span>
               </div>
-              <span className="text-[10px] text-muted-foreground">ID Buffer: {row.original.external_channel_id}</span>
+              <span className="text-[10px] text-muted-foreground">ID canale: {row.original.external_channel_id}</span>
             </Link>
           );
         },
@@ -248,6 +251,23 @@ export default function CampaignDetailPage({ params }: { params: Promise<{ id: s
         }
       />
 
+      {/* Above the progress card: while a campaign is in the line-up it has no
+          publications at all, so the progress card is empty and this is the only
+          thing on the page with anything to say. */}
+      <LineupPanel
+        campaign={campaign}
+        launching={launchCampaign.isPending}
+        onLaunch={() =>
+          withToast(
+            launchCampaign.mutateAsync({
+              campaignId: campaign.id,
+              targetingParams: (campaign.metadata_json ?? {}) as Record<string, unknown>,
+            }),
+            "Campagna lanciata"
+          )
+        }
+      />
+
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
@@ -314,7 +334,7 @@ export default function CampaignDetailPage({ params }: { params: Promise<{ id: s
           <div>
             <CardTitle className="text-base">Statistiche</CardTitle>
             <p className="text-xs text-muted-foreground">
-              Mi piace, visualizzazioni e nuovi iscritti da Buffer. Aggiornate una volta al giorno da Buffer stesso:
+              Mi piace, visualizzazioni e nuovi iscritti. Aggiornate una volta al giorno dal servizio di pubblicazione:
               un post appena pubblicato può impiegare fino a ~24h prima che compaiano i primi dati.
             </p>
           </div>

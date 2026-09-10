@@ -118,7 +118,7 @@ Un "utente" qui è un **cliente/amico** della piattaforma — la persona il cui 
 |---|---|---|
 | `id` | UUID (PK) | |
 | `email` | string, univoca | |
-| `status` | string | `active`, `inactive`, `suspended` — solo utenti `active` sono targetabili da una campagna |
+| `status` | string | `active`, `inactive`, `suspended` — solo utenti `active` sono targetabili da una campagna. Chi si registra dal portale nasce `active` se `platform_settings.auto_activate_new_users` è attivo (default dal 2026-09-10), e chi collega un canale viene attivato comunque, qualunque sia l'impostazione. `suspended` non viene mai toccato automaticamente. Vedi `services/user_activation.py` |
 | `referral_link` | string, nullable | link personale/da promoter di questo utente, configurabile dalla pagina Utenti (icona 🔗 "Configura referral"). Usato solo se una campagna ha `include_referral_link=true` (vedi §7); un utente senza link configurato non è in nessun modo bloccato, riceve semplicemente il testo campagna invariato |
 | `personal_contacts` | string, nullable | blocco di contatti personali/firma di questo utente (nome, telefono, email...), configurabile dalla pagina Utenti (icona 🪪 "Contatti personali"). Usato solo se una campagna ha `include_personal_contacts=true` (vedi §7), aggiunto sempre **subito dopo** l'eventuale `referral_link`; un utente senza contatti configurati non è in nessun modo bloccato, riceve semplicemente il testo campagna invariato |
 | `deleted_at` | timestamp, nullable | soft delete: mai cancellazione fisica di un utente con storico |
@@ -194,7 +194,41 @@ Una campagna di pubblicazione: testo, media opzionale, quando/come pubblicare, e
 | `include_referral_link` | bool, default `false` | se `true`, `resolve_text_for_channel` (`campaign_resolver.py`) aggiunge in fondo al testo risolto per ogni canale il `referral_link` dell'utente **proprietario di quel canale specifico** (mai di un altro utente — la risoluzione avviene per canale, ognuno carica solo il proprio `BufferConnection.user`). Un utente senza `referral_link` configurato non viene escluso né genera errore: il testo resta invariato per lui, esattamente come con questa opzione spenta. Il testo con link incluso passa comunque per lo stesso controllo `PLATFORM_TEXT_LIMITS` di sempre (es. 280 caratteri per X/Twitter): un link che fa sforare il limite fa fallire solo quel target, non l'intera campagna |
 | `include_personal_contacts` | bool, default `false` | stessa meccanica di `include_referral_link` sopra, ma per il `personal_contacts` dell'utente proprietario del canale, aggiunto **subito dopo** l'eventuale link referral (mai prima, mai su un canale di un altro utente). Un utente senza `personal_contacts` configurato non viene escluso né genera errore. Stesso controllo `PLATFORM_TEXT_LIMITS` del link referral: un blocco contatti che fa sforare il limite fa fallire solo quel target |
 | `metadata_json` (colonna `metadata`) | JSONB | parametri di targeting effettivi (es. `channel_ids`), salvati per permettere a `poll_and_queue_scheduled_publications` di rilanciare una campagna programmata con la stessa selezione |
-| `status` | string | `draft`, `preparing`, `queued`, `running`, `paused`, `partially_completed`, `completed`, `failed`, `cancelled` |
+| `participation_mode` | string, default `automatic` | `automatic` = la campagna raggiunge tutti i canali risolti, comportamento storico. `opt_out` = la campagna viene prima **annunciata** ai destinatari, che hanno una finestra per togliersi (vedi [`campaign_participants`](#campaign_participants)) |
+| `announced_at` | timestamp UTC, nullable | quando il palinsesto è stato pubblicato ai partecipanti. `NULL` finché la campagna è una bozza privata |
+| `opt_out_deadline_at` | timestamp UTC, nullable | entro quando un partecipante può ritirarsi. `NULL` = finestra aperta fino al lancio. Validato in `announce_campaign` perché preceda `scheduled_at`: una finestra che chiude dopo la pubblicazione sarebbe una promessa non mantenibile |
+| `auto_launch_at_deadline` | bool, default `false` | cosa succede alla scadenza. `false` = la finestra si chiude e la campagna aspetta il pulsante Lancia. `true` = `poll_and_queue_scheduled_publications` la lancia da sola con i canali rimasti |
+| `status` | string | `draft`, `announced`, `preparing`, `queued`, `running`, `paused`, `partially_completed`, `completed`, `failed`, `cancelled`. `announced` è la finestra di ritiro: i partecipanti esistono, **nulla è stato inviato al provider** |
+
+### `campaign_participants`
+Il **palinsesto**: chi fa parte di una campagna annunciata, prima che diventi un target.
+
+Tabella distinta da `campaign_targets` perché rispondono a domande diverse in momenti diversi:
+
+| | `campaign_participants` | `campaign_targets` |
+|---|---|---|
+| **Quando nasce** | all'annuncio, prima di qualsiasi invio | al lancio |
+| **Cosa dice** | chi è in lista e se il proprietario ha accettato | quale testo va su quale canale |
+| **Un rifiuto** | resta come riga con `status='withdrawn'` | non esiste alcuna riga |
+
+Unirle avrebbe significato creare target per canali che potrebbero non pubblicare mai, rompendo l'invariante su cui poggia tutta la pubblicazione (un target → una publication → un post, `AGENTS.md` regola 1). E avrebbe reso **impossibile registrare un rifiuto**: un canale il cui proprietario si è ritirato non deve avere target, eppure il rifiuto è proprio ciò che lo storico dell'utente deve mostrare.
+
+Le righe non vengono mai cancellate, nemmeno quando qualcuno si ritira: lo storico di quali campagne un promoter si è visto proporre e quali ha rifiutato è il motivo per cui questa tabella esiste.
+
+| Colonna | Tipo | Note |
+|---|---|---|
+| `campaign_id` | UUID (FK → campaigns, CASCADE) | |
+| `user_id` | UUID (FK → users, CASCADE) | proprietario del canale, denormalizzato: ogni query del portale filtra su questo |
+| `social_channel_id` | UUID (FK → social_channels, CASCADE) | |
+| `status` | string, default `included` | `included` (riceverà un target al lancio), `withdrawn` (il proprietario si è ritirato), `removed` (escluso da un amministratore — il proprietario **non** può reinserirlo, altrimenti l'esclusione sarebbe inapplicabile) |
+| `added_by` | string, default `admin` | `admin` = messo in lista dall'annuncio, `user` = aggiunto dal proprietario stesso dal portale |
+| `decided_at`, `decided_reason` | timestamp UTC / string(500), nullable | valorizzati quando `status` lascia `included`. La motivazione è libera e facoltativa: obbligarla produrrebbe solo un campo pieno di "." |
+
+Vincoli e indici:
+
+- `uq_campaign_participant_campaign_channel` su `(campaign_id, social_channel_id)` — un canale compare al massimo una volta per campagna, chiunque ce l'abbia messo. È anche ciò che rende idempotente l'adesione: un secondo click aggiorna la riga esistente invece di duplicarla.
+- `idx_campaign_participants_user` — la pagina palinsesto del portale è "tutte le campagne aperte per questo utente", letta a ogni caricamento.
+- `idx_campaign_participants_campaign_status` su `(campaign_id, status)` — il pannello partecipanti lato admin e la risoluzione dei canali al lancio.
 
 ### `campaign_targets`
 Una riga per ogni coppia `(campagna, canale)` risolta al momento del lancio — con vincolo di unicità (`uq_campaign_target_campaign_channel`) che impedisce duplicati se si rilancia la stessa campagna.
@@ -255,6 +289,21 @@ Riga singola (singleton: zero o una riga, mai più di una) con la chiave API Ope
 | `updated_at` | timestamp | |
 
 Se questa riga non esiste o non ha una chiave impostata, il backend ricade sulla variabile d'ambiente `OPENAI_API_KEY` (se presente) solo come default di primo avvio — la riga in questa tabella, quando presente, ha sempre la precedenza.
+
+---
+
+## 9-bis. Impostazioni di piattaforma
+
+### `platform_settings`
+Riga singleton (una sola riga, o nessuna prima della prima configurazione) con i comportamenti che un amministratore deve poter cambiare senza un deploy. Stesso schema di `ai_settings`.
+
+| Colonna | Tipo | Note |
+|---|---|---|
+| `affiliate_disclosure_text` | string(500), nullable | dichiarazione di affiliazione completa, aggiunta in fondo al testo delle campagne con `include_affiliate_disclosure=true`. La formulazione esatta è una decisione legale, non tecnica: si scrive una volta e vale per tutte le campagne successive |
+| `affiliate_disclosure_text_short` | string(120), nullable | forma breve per le piattaforme con poco spazio (X ha 280 caratteri in tutto) |
+| `auto_activate_new_users` | bool, default `true` | se un account registrato dal portale è subito bersagliabile dalle campagne. Il default è acceso: il rischio che copriva la vecchia porta manuale (chiunque raggiunga la registrazione pubblica finisce nella campagna successiva) è ora coperto meglio dall'annuncio del palinsesto, che rende la presenza in campagna visibile e rifiutabile. Chi gestisce un programma chiuso lo spegne e riottiene il comportamento precedente |
+
+Quando la riga non esiste valgono i default definiti in `models/platform_settings.py`, così la funzionalità si comporta allo stesso modo prima e dopo il primo salvataggio dalla pagina Impostazioni.
 
 ---
 

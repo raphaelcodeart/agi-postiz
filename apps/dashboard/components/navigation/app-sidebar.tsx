@@ -92,7 +92,7 @@ export function AppSidebar() {
             "Omnichannel Responder"/"Blog Writer AI" below), not just the
             three Buffer items. */}
         <SidebarGroup>
-          <SidebarGroupLabel>Campagne Buffer</SidebarGroupLabel>
+          <SidebarGroupLabel>Campagne Agi Post</SidebarGroupLabel>
           <SidebarGroupContent>
             <NavItems items={[...MAIN_NAV_ITEMS, ...BUFFER_NAV_ITEMS]} pathname={pathname} />
           </SidebarGroupContent>

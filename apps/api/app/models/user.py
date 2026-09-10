@@ -32,11 +32,13 @@ class User(Base):
     password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     # Set when the user registered themselves rather than being created by an
-    # administrator. Self-registered users start with status="inactive" on
-    # purpose: "active" is what makes a user targetable by campaigns
-    # (campaign_resolver), so anyone able to hit the public registration
-    # endpoint would otherwise insert themselves into the next campaign.
-    # An administrator activates them explicitly.
+    # administrator. These accounts used to start status="inactive" and wait for
+    # a manual activation, because "active" is what makes a user targetable by
+    # campaigns (campaign_resolver) and the registration endpoint is public.
+    # They now start active by default - the risk that gate covered is handled
+    # by announcing campaigns before sending them, which makes a promoter's
+    # presence in one visible and refusable. See services/user_activation.py;
+    # PlatformSettings.auto_activate_new_users restores the old behaviour.
     self_registered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     # Personal referral/promoter link, pasted verbatim into a campaign's resolved
@@ -62,6 +64,9 @@ class User(Base):
     )
     campaign_targets: Mapped[List["CampaignTarget"]] = relationship(
         "CampaignTarget", back_populates="user", cascade="all, delete-orphan"
+    )
+    campaign_participations: Mapped[List["CampaignParticipant"]] = relationship(
+        "CampaignParticipant", back_populates="user", cascade="all, delete-orphan"
     )
     publications: Mapped[List["Publication"]] = relationship(
         "Publication", back_populates="user", cascade="all, delete-orphan"

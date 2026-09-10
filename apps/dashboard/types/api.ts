@@ -161,8 +161,17 @@ export type TargetingMode =
   | "selected_channels"
   | "selected_platforms";
 
+/**
+ * "automatic" publishes to every resolved channel, as campaigns have always
+ * worked here. "opt_out" announces the line-up first and gives its participants
+ * a window to withdraw before anything reaches the provider.
+ */
+export type ParticipationMode = "automatic" | "opt_out";
+
 export type CampaignStatus =
   | "draft"
+  /** The opt-out window: participants can see the campaign, nothing is sent. */
+  | "announced"
   | "preparing"
   | "queued"
   | "running"
@@ -193,6 +202,9 @@ export interface CampaignCreatePayload {
   include_referral_link: boolean;
   include_personal_contacts: boolean;
   include_affiliate_disclosure: boolean;
+  participation_mode: ParticipationMode;
+  opt_out_deadline_at?: string | null;
+  auto_launch_at_deadline: boolean;
 }
 
 export interface CampaignResponse {
@@ -216,12 +228,51 @@ export interface CampaignResponse {
   include_affiliate_disclosure: boolean;
   metadata_json?: Record<string, unknown> | null;
   status: CampaignStatus;
+  participation_mode: ParticipationMode;
+  announced_at: string | null;
+  opt_out_deadline_at: string | null;
+  auto_launch_at_deadline: boolean;
   media_file_id: string | null;
   media_file: MediaResponse | null;
   article_id?: string | null;
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
+}
+
+/** One channel's standing in an announced campaign, for the admin panel. */
+export interface CampaignParticipant {
+  id: string;
+  user_id: string;
+  user_name: string;
+  social_channel_id: string;
+  channel_name: string;
+  platform: string;
+  status: "included" | "withdrawn" | "removed";
+  /** "user" marks someone who joined the campaign themselves. */
+  added_by: "admin" | "user";
+  decided_at: string | null;
+  decided_reason: string | null;
+}
+
+export interface CampaignLineup {
+  campaign_id: string;
+  status: CampaignStatus;
+  participation_mode: ParticipationMode;
+  announced_at: string | null;
+  opt_out_deadline_at: string | null;
+  auto_launch_at_deadline: boolean;
+  window_open: boolean;
+  included_count: number;
+  withdrawn_count: number;
+  removed_count: number;
+  participants: CampaignParticipant[];
+}
+
+export interface CampaignAnnouncePayload {
+  targeting_params: Record<string, unknown>;
+  opt_out_deadline_at?: string | null;
+  auto_launch_at_deadline: boolean;
 }
 
 export interface CampaignPreviewResponse {
@@ -984,4 +1035,17 @@ export interface StatDashboardResponse {
   last_synced_at: string | null;
   timeseries_monthly: StatTimeseriesPoint[];
   timeseries_yearly: StatTimeseriesPoint[];
+}
+
+/** Platform-wide behaviour an administrator can change without a deploy. */
+export interface PlatformSettingsResponse {
+  affiliate_disclosure_text: string;
+  affiliate_disclosure_text_short: string;
+  auto_activate_new_users: boolean;
+}
+
+export interface PlatformSettingsUpdatePayload {
+  affiliate_disclosure_text?: string | null;
+  affiliate_disclosure_text_short?: string | null;
+  auto_activate_new_users?: boolean | null;
 }

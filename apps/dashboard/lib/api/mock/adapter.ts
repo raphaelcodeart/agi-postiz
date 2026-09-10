@@ -180,7 +180,7 @@ export function listConnections(): Promise<BufferConnectionResponse[]> {
 
 export function createConnection(userId: string, apiKey: string): Promise<BufferConnectionResponse> {
   if (!apiKey.trim()) {
-    return Promise.reject(new Error("Chiave API Buffer non valida"));
+    return Promise.reject(new Error("Chiave API non valida"));
   }
   const existing = mockConnections.find((c) => c.user_id === userId);
   if (existing) {
@@ -323,6 +323,10 @@ export function createCampaign(payload: CampaignCreatePayload): Promise<Campaign
     timezone: payload.timezone,
     targeting_mode: payload.targeting_mode,
     include_referral_link: payload.include_referral_link,
+    participation_mode: payload.participation_mode,
+    announced_at: null,
+    opt_out_deadline_at: payload.opt_out_deadline_at ?? null,
+    auto_launch_at_deadline: payload.auto_launch_at_deadline,
     include_personal_contacts: payload.include_personal_contacts,
     include_affiliate_disclosure: payload.include_affiliate_disclosure ?? false,
     status: "draft",

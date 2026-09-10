@@ -77,7 +77,7 @@ export default function StatisticsDashboardPage() {
         <EmptyState
           icon={TrophyIcon}
           title="Nessuna statistica ancora sincronizzata"
-          description='Premi "Sincronizza tutto" per scaricare da Buffer le metriche di tutti i post pubblicati finora.'
+          description='Premi "Sincronizza tutto" per scaricare le metriche di tutti i post pubblicati finora.'
         />
       ) : (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">

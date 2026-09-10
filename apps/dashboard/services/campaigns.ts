@@ -3,7 +3,9 @@ import { buildQueryString } from "@/lib/api/query-string";
 import { isMockApiEnabled } from "@/lib/env";
 import * as mock from "@/lib/api/mock/adapter";
 import type {
+  CampaignAnnouncePayload,
   CampaignCreatePayload,
+  CampaignLineup,
   CampaignDetailResponse,
   CampaignMetricsResponse,
   CampaignPreviewResponse,
@@ -82,4 +84,33 @@ export function cancelCampaign(campaignId: string): Promise<CampaignResponse> {
 export function deleteCampaign(campaignId: string): Promise<void> {
   if (isMockApiEnabled()) return mock.deleteCampaign(campaignId);
   return apiClient.delete<void>(`/campaigns/${campaignId}`);
+}
+
+/**
+ * Publish the campaign's line-up without sending anything.
+ *
+ * Distinct from launchCampaign on purpose: launching is the irreversible step
+ * (the provider receives every post with its date), and this is what puts a
+ * decision point in front of it.
+ */
+export function announceCampaign(
+  campaignId: string,
+  payload: CampaignAnnouncePayload
+): Promise<CampaignLineup> {
+  return apiClient.post<CampaignLineup>(`/campaigns/${campaignId}/announce`, payload);
+}
+
+export function getCampaignLineup(campaignId: string): Promise<CampaignLineup> {
+  return apiClient.get<CampaignLineup>(`/campaigns/${campaignId}/lineup`);
+}
+
+export function removeCampaignParticipant(
+  campaignId: string,
+  participantId: string,
+  reason?: string
+): Promise<CampaignLineup> {
+  const query = reason ? `?reason=${encodeURIComponent(reason)}` : "";
+  return apiClient.delete<CampaignLineup>(
+    `/campaigns/${campaignId}/lineup/${participantId}${query}`
+  );
 }

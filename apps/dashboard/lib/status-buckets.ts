@@ -20,6 +20,10 @@ export function campaignStatusBuckets(total: number, byStatus: Record<string, nu
   return [
     { key: "total", label: "Totale campagne", value: total },
     { key: "draft", label: "Bozze", value: sumStatuses(byStatus, ["draft"]) },
+    // Its own card rather than folded into "Bozze": these are the campaigns with
+    // a clock running on them, waiting either for a deadline or for someone to
+    // press Launch. Buried among drafts, they are the ones that get forgotten.
+    { key: "announced", label: "In palinsesto", value: sumStatuses(byStatus, ["announced"]) },
     { key: "active", label: "In corso", value: sumStatuses(byStatus, ["preparing", "queued", "running", "paused"]) },
     { key: "completed", label: "Completate", value: sumStatuses(byStatus, ["completed", "partially_completed"]) },
     { key: "failed", label: "Fallite", value: sumStatuses(byStatus, ["failed", "cancelled"]) },

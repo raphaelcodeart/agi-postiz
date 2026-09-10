@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import { toast } from "sonner";
-import { PlusIcon, CopyIcon, Trash2Icon, MegaphoneIcon, FileEditIcon, LoaderIcon, CheckCircle2Icon, XCircleIcon, type LucideIcon } from "lucide-react";
+import { PlusIcon, CopyIcon, Trash2Icon, MegaphoneIcon, FileEditIcon, CalendarClockIcon, LoaderIcon, CheckCircle2Icon, XCircleIcon, type LucideIcon } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { DataTable } from "@/components/shared/data-table";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -26,11 +26,13 @@ import type { CampaignResponse, CampaignStatus } from "@/types/api";
 const CAMPAIGN_SUMMARY_ICONS: Record<string, LucideIcon> = {
   total: MegaphoneIcon,
   draft: FileEditIcon,
+  announced: CalendarClockIcon,
   active: LoaderIcon,
   completed: CheckCircle2Icon,
   failed: XCircleIcon,
 };
 const CAMPAIGN_SUMMARY_TONES: Record<string, "default" | "success" | "warning" | "destructive"> = {
+  announced: "warning",
   completed: "success",
   active: "warning",
   failed: "destructive",
@@ -38,6 +40,7 @@ const CAMPAIGN_SUMMARY_TONES: Record<string, "default" | "success" | "warning" |
 
 const STATUS_OPTIONS: { value: CampaignStatus; label: string }[] = [
   { value: "draft", label: "Bozza" },
+  { value: "announced", label: "In palinsesto" },
   { value: "preparing", label: "Preparazione" },
   { value: "queued", label: "In coda" },
   { value: "running", label: "In corso" },

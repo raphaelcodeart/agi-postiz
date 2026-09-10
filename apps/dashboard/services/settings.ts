@@ -3,6 +3,8 @@ import { isMockApiEnabled } from "@/lib/env";
 import * as mock from "@/lib/api/mock/adapter";
 import type {
   AISettingsResponse,
+  PlatformSettingsResponse,
+  PlatformSettingsUpdatePayload,
   AISettingsUpdatePayload,
   HealthResponse,
   SystemSettingsResponse,
@@ -37,4 +39,14 @@ export function updateAISettings(payload: AISettingsUpdatePayload): Promise<AISe
 export function deleteAISettings(): Promise<void> {
   if (isMockApiEnabled()) return mock.deleteAISettings();
   return apiClient.delete<void>("/settings/ai");
+}
+
+export function getPlatformSettings(): Promise<PlatformSettingsResponse> {
+  return apiClient.get<PlatformSettingsResponse>("/settings/platform");
+}
+
+export function updatePlatformSettings(
+  payload: PlatformSettingsUpdatePayload
+): Promise<PlatformSettingsResponse> {
+  return apiClient.put<PlatformSettingsResponse>("/settings/platform", payload);
 }

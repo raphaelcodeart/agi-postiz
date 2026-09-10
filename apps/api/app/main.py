@@ -11,7 +11,7 @@ from app.api.v1 import bundle_social_webhooks
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    description="Backend services for Buffer-integrated multi-tenant social publishing platform.",
+    description="Backend services for the Agi Post multi-tenant social publishing platform.",
     version="1.0.0",
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
 )

@@ -84,23 +84,27 @@ def test_tampered_token_is_rejected():
 
 # --- registration policy ----------------------------------------------------
 
-def test_registration_default_status_keeps_user_out_of_campaigns():
+def test_registration_status_follows_the_platform_setting():
     """
-    A self-registered user must start "inactive".
+    Registration must not hardcode a status either way.
 
-    campaign_resolver only targets users with status "active", so if
-    registration ever defaulted to active, anyone who can reach the public
-    endpoint would insert themselves into the next campaign and get published
-    on behalf of the platform.
+    It used to hardcode "inactive", because being active meant being publishable
+    with no say in it - anyone reaching the public endpoint would have inserted
+    themselves into the next campaign. That risk is now covered by announcing
+    campaigns before sending them, and the policy moved to a setting an operator
+    controls (see services/user_activation.py). The behavioural tests for it live
+    in tests/services/test_user_activation.py; this one only guards against the
+    hardcoded value coming back.
     """
     import inspect
     from app.api.v1 import portal
 
     source = inspect.getsource(portal.register)
-    assert 'status="inactive"' in source, (
-        "La registrazione pubblica deve creare utenti inattivi: "
-        "'active' li rende immediatamente bersaglio delle campagne."
+    assert 'status="inactive"' not in source, (
+        "La registrazione non deve forzare lo stato: deve seguire "
+        "PlatformSettings.auto_activate_new_users."
     )
+    assert "status_for_new_registration" in source
 
 
 def test_registration_never_overwrites_an_existing_password():

@@ -114,7 +114,7 @@ export default function PublicationDetailPage({ params }: { params: Promise<{ id
               <PlatformBadge platform={channel_platform} />
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">ID Buffer canale</span>
+              <span className="text-muted-foreground">ID canale</span>
               <span className="text-xs">{pub.external_channel_id}</span>
             </div>
             <div className="flex items-center justify-between">
@@ -161,7 +161,7 @@ export default function PublicationDetailPage({ params }: { params: Promise<{ id
                     target="_blank"
                     rel="noreferrer"
                     className="truncate text-primary hover:underline"
-                    title="Link diretto al post non ancora disponibile da Buffer - apre il profilo del canale"
+                    title="Link diretto al post non ancora disponibile - apre il profilo del canale"
                   >
                     Vedi profilo canale
                   </a>
@@ -235,7 +235,7 @@ export default function PublicationDetailPage({ params }: { params: Promise<{ id
             <div>
               <CardTitle className="text-base">Statistiche</CardTitle>
               <p className="text-xs text-muted-foreground">
-                Dati da Buffer per questo singolo post. Aggiornati una volta al giorno da Buffer stesso: può
+                Dati di questo singolo post. Aggiornati una volta al giorno dal servizio di pubblicazione: può
                 impiegare fino a ~24h prima che compaiano i primi dati.
               </p>
             </div>

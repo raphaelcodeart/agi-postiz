@@ -4,7 +4,13 @@ import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from "@ta
 import * as campaignsService from "@/services/campaigns";
 import { queryKeys } from "@/lib/query/keys";
 import type { ListCampaignsParams } from "@/services/campaigns";
-import type { CampaignCreatePayload, CampaignDetailResponse, CampaignMetricsResponse } from "@/types/api";
+import type {
+  CampaignAnnouncePayload,
+  CampaignCreatePayload,
+  CampaignDetailResponse,
+  CampaignLineup,
+  CampaignMetricsResponse,
+} from "@/types/api";
 
 export function useCampaigns(params: ListCampaignsParams = {}) {
   return useQuery({
@@ -79,6 +85,52 @@ export function useLaunchCampaign() {
       queryClient.invalidateQueries({ queryKey: queryKeys.campaigns.detail(variables.campaignId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.campaigns.summary() });
       queryClient.invalidateQueries({ queryKey: queryKeys.publications.summary() });
+    },
+  });
+}
+
+/**
+ * Publishing the line-up, not the posts.
+ *
+ * Kept apart from useLaunchCampaign because they are opposite in the way that
+ * matters: launching is irreversible (the provider gets every post with its
+ * date), announcing sends nothing at all.
+ */
+export function useAnnounceCampaign() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      campaignId,
+      payload,
+    }: {
+      campaignId: string;
+      payload: CampaignAnnouncePayload;
+    }) => campaignsService.announceCampaign(campaignId, payload),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["campaigns", "list"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.campaigns.detail(variables.campaignId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.campaigns.lineup(variables.campaignId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.campaigns.summary() });
+    },
+  });
+}
+
+export function useCampaignLineup(campaignId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.campaigns.lineup(campaignId ?? ""),
+    queryFn: () => campaignsService.getCampaignLineup(campaignId as string),
+    enabled: Boolean(campaignId) && enabled,
+  });
+}
+
+export function useRemoveCampaignParticipant(campaignId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ participantId, reason }: { participantId: string; reason?: string }) =>
+      campaignsService.removeCampaignParticipant(campaignId, participantId, reason),
+    onSuccess: (data: CampaignLineup) => {
+      queryClient.setQueryData(queryKeys.campaigns.lineup(campaignId), data);
+      queryClient.invalidateQueries({ queryKey: queryKeys.campaigns.detail(campaignId) });
     },
   });
 }
