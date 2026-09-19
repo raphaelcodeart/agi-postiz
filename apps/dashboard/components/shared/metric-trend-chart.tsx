@@ -50,13 +50,18 @@ interface MetricTrendChartProps {
 }
 
 /**
- * Grafico di andamento mensile/annuale, riusato da tutti e 3 i livelli del
- * modulo Statistiche (dashboard, utente, canale) - alimentato da
- * StatDashboardResponse/StatUserDetailResponse/StatChannelDetailResponse
+ * Grafico di andamento mensile/annuale, riusato da ogni livello del modulo
+ * Statistiche - le 3 pagine dell'amministratore (dashboard, utente, canale) e
+ * le 2 del portale del promoter (le sue statistiche, un suo canale) - alimentato
+ * da StatDashboardResponse/StatUserDetailResponse/StatChannelDetailResponse
  * .timeseries_monthly/_yearly (bucket calcolati server-side per data di
  * pubblicazione, non di sincronizzazione, vedi statistics_service.timeseries).
  * Una sola metrica alla volta (mai due assi) - il selettore lascia scegliere
  * quale, "Post pubblicati" incluso come pseudo-metrica sempre disponibile.
+ *
+ * Sta in components/shared e non sotto app/(dashboard)/statistics perche' ormai
+ * lo usano due aree diverse del prodotto; e' interamente pilotato dalle props,
+ * quindi non sa ne' deve sapere di chi sono i dati che disegna.
  */
 export function MetricTrendChart({ monthly, yearly }: MetricTrendChartProps) {
   const [granularity, setGranularity] = useState<"month" | "year">("month");
@@ -82,7 +87,7 @@ export function MetricTrendChart({ monthly, yearly }: MetricTrendChartProps) {
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Select value={metric} onValueChange={(value) => setMetric(value as TrendMetricKey)}>
-          <SelectTrigger className="w-56">
+          <SelectTrigger className="w-56 bg-card text-card-foreground shadow-xs dark:bg-card dark:hover:bg-muted">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -95,9 +100,19 @@ export function MetricTrendChart({ monthly, yearly }: MetricTrendChartProps) {
         </Select>
 
         <Tabs value={granularity} onValueChange={(value) => setGranularity(value as "month" | "year")}>
-          <TabsList>
-            <TabsTrigger value="month">Mensile</TabsTrigger>
-            <TabsTrigger value="year">Annuale</TabsTrigger>
+          {/* Fondo della card con bordo al posto del bg-muted di default, e la
+              scheda attiva piena col colore primario: il grigio su grigio non
+              faceva capire quale vista fosse selezionata. */}
+          <TabsList className="h-9 gap-1 border border-border bg-card p-1 shadow-xs dark:bg-card">
+            {(["month", "year"] as const).map((value) => (
+              <TabsTrigger
+                key={value}
+                value={value}
+                className="px-3 text-card-foreground/70 hover:bg-muted hover:text-card-foreground dark:text-card-foreground/70 data-active:bg-primary data-active:text-primary-foreground data-active:shadow-sm dark:data-active:border-transparent dark:data-active:bg-primary dark:data-active:text-primary-foreground"
+              >
+                {value === "month" ? "Mensile" : "Annuale"}
+              </TabsTrigger>
+            ))}
           </TabsList>
         </Tabs>
       </div>

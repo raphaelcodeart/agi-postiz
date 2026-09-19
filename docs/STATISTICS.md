@@ -1,6 +1,6 @@
 # Modulo Statistiche
 
-Modulo separato e indipendente: dashboard **persistita** (non on-demand) del valore reale che ogni promoter/canale social porta alle campagne marketing — views, reazioni, commenti, nuovi iscritti — navigabile per **utente → canale → campagna/post**, con storico salvato nel database invece che ricalcolato ogni volta da Buffer. Non modifica né duplica alcuna tabella/funzionalità esistente: l'unico collegamento con il resto della piattaforma sono foreign key in sola lettura verso `publications`/`campaigns`/`users`/`social_channels`/`buffer_connections`/`administrators` — stesso principio di isolamento già usato per l'Omnichannel Responder (vedi [OMNICHANNEL_RESPONDER.md](./OMNICHANNEL_RESPONDER.md)). Per lo schema generale vedi [DATABASE.md](./DATABASE.md); per le metriche **live** (non salvate, già esistenti prima di questo modulo) vedi [FUNCTIONALITY.md §10](./FUNCTIONALITY.md#10-metriche).
+Modulo separato e indipendente: dashboard **persistita** (non on-demand) del valore reale che ogni promoter/canale social porta alle campagne marketing — views, reazioni, commenti, nuovi iscritti — navigabile per **utente → canale → campagna/post**, con storico salvato nel database invece che ricalcolato ogni volta da Buffer. Lo leggono in due: l'amministratore, su tutta la piattaforma (§5-§9), e ogni promoter sui propri dati dal suo portale (§11) — stesse funzioni di aggregazione, filtrate sull'utente del token. Non modifica né duplica alcuna tabella/funzionalità esistente: l'unico collegamento con il resto della piattaforma sono foreign key in sola lettura verso `publications`/`campaigns`/`users`/`social_channels`/`buffer_connections`/`administrators` — stesso principio di isolamento già usato per l'Omnichannel Responder (vedi [OMNICHANNEL_RESPONDER.md](./OMNICHANNEL_RESPONDER.md)). Per lo schema generale vedi [DATABASE.md](./DATABASE.md); per le metriche **live** (non salvate, già esistenti prima di questo modulo) vedi [FUNCTIONALITY.md §10](./FUNCTIONALITY.md#10-metriche).
 
 Questo file è scritto per essere sufficiente, da solo, a ricostruire il modulo identico su un altro server (schema dati, motore di sync, endpoint, decisioni architetturali e i loro perché) senza dover rileggere il codice riga per riga.
 
@@ -18,6 +18,7 @@ Questo file è scritto per essere sufficiente, da solo, a ricostruire il modulo 
 8. [Export Excel](#8-export-excel)
 9. [Grafici di andamento (mensile/annuale)](#9-grafici-di-andamento-mensileannuale)
 10. [Limiti noti di questa v1](#10-limiti-noti-di-questa-v1)
+11. [Le statistiche nel portale del promoter](#11-le-statistiche-nel-portale-del-promoter)
 
 ---
 
@@ -136,8 +137,164 @@ Aggiunti il 2026-08-26 ai 3 livelli esistenti (dashboard generale, utente, canal
 - **Interazione**: tooltip al passaggio del mouse/focus su ogni barra (componente `Tooltip` condiviso, stesso usato altrove nell'app) con periodo, valore esatto e numero di post in quel bucket; l'ultima barra porta anche un'etichetta diretta sempre visibile (valore all'apice) - le altre restano leggibili solo via tooltip/asse, per non affollare il grafico di numeri.
 - **Vista mensile limitata agli ultimi 12 bucket** (il backend restituisce tutta la storia disponibile, il frontend mostra solo la coda più recente) - la vista annuale mostra sempre tutti gli anni disponibili, tipicamente pochi.
 
+### Lo snapshot giusto: bug corretto il 2026-09-14
+
+bundle.social **non** restituisce un solo valore di metriche per post: restituisce **tutti gli
+snapshot** che ha mai preso (uno al giorno circa, più quello scritto pochi secondi dopo la
+pubblicazione), e li elenca **dal più recente al più vecchio**. `prod_client.get_post_metrics`
+leggeva `items[-1]` con il commento "the API appends a row per refresh" — assunzione sbagliata:
+`items[-1]` è lo snapshot **più vecchio**, cioè quello scattato appena il post è andato online,
+quando per definizione ogni contatore è ancora 0.
+
+Effetto: la dashboard mostrava praticamente ogni post a 0 su tutte le metriche, il sync riportava
+"completato" senza errori, e niente da nessuna parte diceva perché — esattamente il modo di
+fallire contro cui mettono in guardia i commenti di questo modulo. I pochi post con un numero
+diverso da zero erano fermi alla loro cifra del primo giorno (un post reale a 69 visualizzazioni
+risultava 65, il valore del 9 settembre, e non si muoveva più).
+
+La correzione **non** si limita a invertire l'indice: sceglie lo snapshot con il timestamp più
+recente (`max` su `updatedAt`/`createdAt`), così se un domani il provider cambiasse l'ordine di
+elencazione il bug non tornerebbe in silenzio. Due test di regressione in
+`tests/integrations/test_bundle_social_client.py` coprono entrambi gli ordinamenti.
+
+**Da qui discende una cosa importante sull'uso**: le metriche di un post appena pubblicato sono
+**sempre 0**, e restano 0 finché bundle.social non fa il suo giro di aggiornamento (~24h). Non è un
+malfunzionamento: sincronizzare subito dopo una campagna non può produrre numeri.
+
+### `likes` e non `reactions` (2026-09-14)
+
+`reactions` è una metrica dell'era Buffer: bundle.social riporta `likes` per **tutte** le
+piattaforme (Instagram, TikTok, LinkedIn, YouTube, Facebook), mai `reactions`. Le mini-tile per
+riga (`ROW_SUMMARY_METRIC_KEYS`, §6) chiedevano però `reactions`, quindi la tile "Mi piace" accanto
+a ogni promoter e a ogni canale era **permanentemente vuota** su tutte le connessioni di questa
+piattaforma — che oggi sono la totalità (31 su 31, provider `bundle_social`, nessuna Buffer
+residua). Ora chiedono `likes`. Di conseguenza l'etichetta di `likes` non è più "Like FB" (che su
+Buffer voleva davvero dire Facebook) ma "Mi piace"; `reactions` resta in `METRIC_TILE_CONFIG` come
+"Reazioni (storico Buffer)" perché le righe storiche continuino a mostrarsi.
+
+### Errori di sincronizzazione che NON sono bug
+
+Alcuni post falliscono il sync con un messaggio già esplicito, e la causa è di configurazione lato
+bundle.social, non di codice:
+
+- *"Il canale X non risulta più collegato"* (`Team does not have a X account`): quell'account social
+  è stato scollegato dal team bundle.social del cliente. Va ricollegato dal portale.
+- *"Il post non risulta pubblicato su X"* (`Post doesn't have external ID for that platform`): il
+  provider ha accettato il post ma quella piattaforma non l'ha mai pubblicato davvero.
+
 ## 10. Limiti noti di questa v1
 
 - `stat_metric_history` viene scritta ad ogni sync ma resta priva di una UI propria - i grafici del §9 usano `stat_post_metrics`, non lo storico multi-sync per singolo post (vedi nota in §2).
 - Nessun export Excel a livello di singola campagna (solo generale/utente/canale) — i dati sono comunque consultabili nella scheda campagna esistente.
 - Il refresh del singolo post non ha un indicatore di "in coda" persistito (è sincrono, un'unica richiesta HTTP) — se la connessione è occupata risponde 429 e l'admin riprova.
+
+---
+
+## 11. Le statistiche nel portale del promoter
+
+Aggiunte il 2026-09-19. Il promoter ha nel suo portale (`/portal/statistics`) la
+stessa sezione Statistiche dell'amministratore, ristretta a sé: i propri totali,
+il grafico di andamento, l'elenco dei propri canali e, dentro ognuno, i singoli
+post con le loro metriche.
+
+**Niente aggregazioni nuove.** `app/api/v1/portal_statistics.py` non ricalcola
+nulla: chiama gli stessi `statistics_service.build_user_detail` /
+`build_channel_detail` che alimentano le pagine admin, passando
+`current_user.id`. È la proprietà che conta: i numeri che il promoter vede e
+quelli che l'amministratore vede per lui non possono divergere, perché sono la
+stessa funzione sulle stesse righe `stat_post_metrics`. Le risposte riusano
+`StatUserDetailResponse`/`StatChannelDetailResponse` — nessuno schema parallelo,
+e sul frontend i tipi si importano da `types/api.ts` invece di essere
+ridichiarati in `lib/portal/server.ts`.
+
+**Scoping.** Vale la regola di tutto il portale (vedi il docstring di
+`portal.py`): l'id utente viene dal token validato, mai da un path o da un body
+— qui non esiste nemmeno un endpoint che accetti uno `user_id`. L'unico
+parametro manipolabile è l'id del canale nell'URL, e `build_channel_detail` lo
+verifica già contro la connessione dell'utente (join canale → organizzazione →
+connessione → utente), quindi il canale di un altro promoter risponde 404 come
+uno inesistente. Idem per un `sync_run_id` altrui, filtrato su `scope_user_id`.
+
+| Endpoint | Uso |
+|---|---|
+| `GET /portal/statistics` | Totali propri + canali con mini-totali + timeseries |
+| `GET /portal/statistics/channels/{id}` | Totali canale + elenco post |
+| `POST /portal/statistics/sync` | Sincronizza i propri post (202) |
+| `GET /portal/statistics/sync/{id}` | Stato/progresso, per il polling del bottone |
+| `GET /portal/statistics/export.xlsx` | Export Excel per canale |
+| `GET /portal/statistics/channels/{id}/export.xlsx` | Export Excel per post |
+
+### Cosa il promoter **non** ha, e perché
+
+- **La classifica dei promoter** (la dashboard generale del §5) non esiste nel
+  portale: mostra chi rende più di chi, cioè esattamente l'unica cosa di questo
+  modulo che un promoter non deve poter vedere degli altri.
+- **Il bottone "aggiorna" per singolo post** (§4) non c'è. Quello
+  dell'amministratore scavalca la guardia anti-spreco di proposito, perché è
+  un'azione singola e consapevole; moltiplicato per ogni promoter e per ogni riga
+  diventerebbe il modo più facile di bruciare la quota API del cliente.
+  L'aggiornamento nel portale è uno solo, di scope utente, che rispetta la
+  guardia.
+
+### Il sync self-service
+
+`POST /portal/statistics/sync` crea uno `StatSyncRun` con `scope="user"` sul
+proprio id e dispatcha lo **stesso** `sync_user_statistics_task` del bottone
+admin — eredita quindi senza aggiungere nulla le due protezioni che rendono
+sostenibile metterlo in mano a ogni promoter (§4): la guardia di staleness (un
+post già scaricato nelle ultime 20 ore viene saltato, quindi due click di fila
+costano zero chiamate) e il `RateLimiter` Redis per connessione (il sync non
+compete mai con una campagna in corso di pubblicazione sulla stessa API key).
+
+Due aggiunte rispetto al bottone admin:
+
+- **Run già in volo riusato**: se esiste un run dell'utente in stato
+  `queued`/`running`, viene restituito quello invece di crearne un secondo. Un
+  amministratore preme il suo bottone una volta e guarda la barra; una pagina
+  aperta su un telefono viene ricaricata e il bottone ripremuto, e senza questo
+  ogni click lascerebbe dietro di sé un run in più da seguire in polling.
+- **`stat_sync_runs.triggered_by_user_id`** (migration `c7a2e9f14b30`): colonna
+  nuova, FK a `users` con `ondelete SET NULL`. `triggered_by` punta ad
+  `administrators`, quindi da sola non potrebbe registrare chi ha chiesto il
+  sync, e un run self-service resterebbe indistinguibile da uno di un
+  amministratore poi cancellato — la sua FK è già `SET NULL`.
+
+### Frontend
+
+- `app/portal/(app)/statistics/page.tsx` — totali, grafico di andamento, elenco
+  canali cliccabili con le stesse 4 mini-tile per riga delle liste admin
+  (`ROW_SUMMARY_METRIC_KEYS`), bottone "Aggiorna statistiche", export Excel.
+- `app/portal/(app)/statistics/channels/[channelId]/page.tsx` — totali canale,
+  grafico, i post uno per scheda.
+- `MetricTrendChart` si è spostato da `app/(dashboard)/statistics/_components/`
+  a `components/shared/`: ora lo usano due aree del prodotto, ed è interamente
+  pilotato dalle props, quindi non sa di chi sono i dati che disegna.
+- **Schede e non tabella** per i post: la `DataTable` admin vive su uno schermo
+  largo, questa pagina si apre soprattutto dal telefono (il portale ha la barra
+  di navigazione in basso proprio per quello), e cinque colonne lì si leggono
+  solo scorrendo di lato.
+- `SyncStatsButton` (`sync-stats-button.tsx`) non riusa
+  `components/shared/sync-button.tsx`: quello è costruito su react-query e
+  `useSyncFlow`, che nel portale non esistono — le pagine del portale sono
+  Server Components che leggono e basta. A fine sincronizzazione qui basta
+  `router.refresh()`.
+- **Homepage arricchita**: `PortalStatsResponse` espone ora anche
+  `total_follows`, `total_clicks` ed `engagement_rate` (quest'ultima *mediata*,
+  mai sommata, e `null` — non `0` — quando nessun post la riporta). Le tile
+  corrispondenti compaiono solo se hanno un valore: una tile a zero direbbe
+  "nessun nuovo iscritto" dove la verità è "questa piattaforma non lo riporta".
+  La `StatTile` del portale è passata da `page.tsx` a
+  `app/portal/_shared/stat-tile.tsx`, condivisa fra homepage e sezione
+  Statistiche.
+- Voce di navigazione **"Statistiche"** in `portal-nav.tsx`, subito dopo
+  "Palinsesto": la home mostra già le cifre di sintesi, questa è dove si va
+  avendo deciso di guardare sul serio.
+
+### Nota sull'export
+
+L'intestazione della colonna `likes` negli export Excel era rimasta
+"Mi piace (Facebook)", etichetta dell'era Buffer, mentre l'interfaccia l'aveva
+già corretta in "Mi piace" (§9). Ora è "Mi piace" in entrambi. Le intestazioni
+vivono in `app/services/xlsx_export.py` (`METRIC_HEADERS`, `metric_values`,
+`xlsx_response`) e non più dentro il router admin, perché ora due router le
+usano — lasciandole in uno dei due, l'altro avrebbe finito per tenerne una copia.

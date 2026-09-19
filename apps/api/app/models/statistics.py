@@ -41,6 +41,13 @@ class StatSyncRun(Base):
     scope_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     scope_campaign_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("campaigns.id", ondelete="SET NULL"), nullable=True)
     triggered_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("administrators.id", ondelete="SET NULL"), nullable=True)
+    # Chi ha premuto il bottone quando non e' un amministratore ma il promoter
+    # stesso dal portale (scope="user", sempre e solo sui propri post - vedi
+    # app/api/v1/portal_statistics.py). Colonna separata da triggered_by invece
+    # di riusarla: puntano a due tabelle diverse, e con la sola triggered_by a
+    # NULL un sync self-service sarebbe indistinguibile da uno lanciato da un
+    # amministratore poi cancellato (quella FK e' ondelete SET NULL).
+    triggered_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     # queued, running, completed, completed_with_errors, failed
     status: Mapped[str] = mapped_column(String(30), default="queued", nullable=False)

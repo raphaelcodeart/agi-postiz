@@ -8,7 +8,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { PlatformDistributionChart } from "@/components/shared/platform-distribution-chart";
 import { MetricMiniStat } from "@/components/shared/metric-mini-stat";
-import { MetricTrendChart } from "./_components/metric-trend-chart";
+import { MetricTrendChart } from "@/components/shared/metric-trend-chart";
 import { SyncButton } from "@/components/shared/sync-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";

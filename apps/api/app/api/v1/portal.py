@@ -138,6 +138,13 @@ class PortalStatsResponse(BaseModel):
     total_shares: int
     total_views: int
     total_reach: int
+    total_follows: int
+    total_clicks: int
+    # L'unica metrica in percentuale: media dei post che la riportano, mai una
+    # somma (stessa regola di statistics_service._totals_dict). None quando
+    # nessun post ne ha una - 0.0 direbbe "coinvolgimento nullo" invece di
+    # "non riportato".
+    engagement_rate: Optional[float] = None
 
 
 # --------------------------------------------------------------------------
@@ -492,6 +499,11 @@ def get_my_stats(
             func.coalesce(func.sum(StatPostMetric.shares), 0),
             func.coalesce(func.sum(StatPostMetric.views), 0),
             func.coalesce(func.sum(StatPostMetric.reach), 0),
+            func.coalesce(func.sum(StatPostMetric.follows), 0),
+            func.coalesce(func.sum(StatPostMetric.clicks), 0),
+            # Niente coalesce: AVG ignora gia' i NULL, e un NULL qui significa
+            # "nessun post riporta questa metrica", che e' diverso da zero.
+            func.avg(StatPostMetric.engagement_rate),
         )
         .filter(StatPostMetric.user_id == current_user.id)
         .one()
@@ -509,6 +521,9 @@ def get_my_stats(
         total_shares=int(totals[3] or 0),
         total_views=int(totals[4] or 0),
         total_reach=int(totals[5] or 0),
+        total_follows=int(totals[6] or 0),
+        total_clicks=int(totals[7] or 0),
+        engagement_rate=float(totals[8]) if totals[8] is not None else None,
     )
 
 

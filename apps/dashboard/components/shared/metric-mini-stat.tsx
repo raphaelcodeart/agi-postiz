@@ -5,17 +5,20 @@ interface MetricMiniStatProps {
 
 /**
  * Etichetta piccola sopra, valore sotto - stesso principio dello StatCard
- * (components/shared/stat-card.tsx) ma senza bordo/padding di una Card intera,
- * pensato per stare dentro una cella di tabella o in fila accanto ad altri
+ * (components/shared/stat-card.tsx) ma piu' compatta di una Card intera,
+ * pensata per stare dentro una cella di tabella o in fila accanto ad altre
  * (dettaglio canale/utente del modulo Statistiche). Le etichette sono quelle
  * abbreviate di METRIC_TILE_CONFIG (lib/metric-config.ts), non quelle estese
  * usate nelle StatCard in cima alla pagina.
+ *
+ * Fondo della card (bianco nel portale) con bordo pieno, non un grigio tenue:
+ * su una riga gia' chiara il grigio spariva e il valore non si leggeva.
  */
 export function MetricMiniStat({ label, value }: MetricMiniStatProps) {
   return (
-    <div className="flex min-w-14 flex-col items-center gap-0.5 rounded-md bg-muted/50 px-2 py-1">
-      <span className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">{label}</span>
-      <span className="text-xs font-semibold tabular-nums text-foreground">{value}</span>
+    <div className="flex min-w-16 flex-col items-center gap-0.5 rounded-lg border border-border bg-card px-2.5 py-1.5 shadow-xs">
+      <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{label}</span>
+      <span className="text-sm font-semibold tabular-nums text-card-foreground">{value}</span>
     </div>
   );
 }

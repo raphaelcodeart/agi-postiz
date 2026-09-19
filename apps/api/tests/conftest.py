@@ -129,6 +129,24 @@ def client(db):
 
 
 @pytest.fixture()
+def admin_token():
+    """Mints a dashboard session for an administrator, the way logging in would.
+
+    Deliberately separate from portal_token below: the two audiences are the
+    point of the whole split (see tests/api/test_portal_auth.py), and a fixture
+    that could mint either from the same call would make it easy to write a test
+    that passes for the wrong reason.
+    """
+    from app.core.security import TOKEN_TYPE_ADMIN, SecurityService
+
+    def _token(admin):
+        token = SecurityService.create_access_token(subject=admin.id, token_type=TOKEN_TYPE_ADMIN)
+        return {"Authorization": f"Bearer {token}"}
+
+    return _token
+
+
+@pytest.fixture()
 def portal_token():
     """Mints a portal session for a user, the way logging in would."""
     from app.core.security import TOKEN_TYPE_PORTAL_USER, SecurityService

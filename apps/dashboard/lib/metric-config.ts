@@ -7,8 +7,13 @@ import type { StatMetricTotals } from "@/types/api";
 // blending them would misrepresent what Buffer actually reported). Ordered so
 // the ones the admin cares about most (reactions, views, new follows) lead.
 export const METRIC_TILE_CONFIG: { type: string; label: string; shortLabel: string; icon: LucideIcon }[] = [
-  { type: "reactions", label: "Mi piace / Reazioni", shortLabel: "Mi piace", icon: HeartIcon },
-  { type: "likes", label: "Mi piace (Facebook)", shortLabel: "Like FB", icon: HeartIcon },
+  // "likes" is what bundle.social reports for EVERY platform (Instagram,
+  // TikTok, LinkedIn, YouTube, Facebook), so it is the real "mi piace" of this
+  // platform - the old "Like FB" label dated from Buffer, where it did mean
+  // Facebook specifically. "reactions" is Buffer-only and stays listed so
+  // historical rows still render; no bundle.social channel ever fills it.
+  { type: "likes", label: "Mi piace", shortLabel: "Mi piace", icon: HeartIcon },
+  { type: "reactions", label: "Reazioni (storico Buffer)", shortLabel: "Reazioni", icon: HeartIcon },
   { type: "views", label: "Visualizzazioni", shortLabel: "Views", icon: EyeIcon },
   { type: "impressions", label: "Impression", shortLabel: "Impression", icon: EyeIcon },
   { type: "reach", label: "Copertura (persone raggiunte)", shortLabel: "Copertura", icon: EyeIcon },
@@ -51,7 +56,10 @@ export function statMetricTiles(
 // statistics/users/[id]/page.tsx) - cosi' i totali sono visibili senza dover
 // aprire il dettaglio. Stesso principio di statMetricTiles ma per un
 // sottoinsieme fisso invece di "tutte le metriche disponibili per questo post".
-export const ROW_SUMMARY_METRIC_KEYS: (keyof StatMetricTotals)[] = ["views", "reactions", "comments", "shares"];
+// "likes", not "reactions": every connection on this platform is bundle.social
+// (see METRIC_TILE_CONFIG above), which never populates reactions - so the
+// "Mi piace" tile on every row of these lists was permanently blank.
+export const ROW_SUMMARY_METRIC_KEYS: (keyof StatMetricTotals)[] = ["views", "likes", "comments", "shares"];
 
 export function shortLabelForMetric(type: string): string {
   return METRIC_TILE_CONFIG.find((c) => c.type === type)?.shortLabel ?? type;

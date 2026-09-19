@@ -135,7 +135,22 @@ export type PortalStats = {
   total_shares: number;
   total_views: number;
   total_reach: number;
+  total_follows: number;
+  total_clicks: number;
+  /** L'unica metrica in percentuale: media dei post che la riportano, mai una
+   *  somma. null quando nessun post ne ha una - 0 direbbe "coinvolgimento
+   *  nullo" invece di "non riportato". */
+  engagement_rate: number | null;
 };
+
+/**
+ * Le pagine /portal/statistics non hanno un tipo proprio qui: il backend
+ * restituisce le stesse StatUserDetailResponse/StatChannelDetailResponse della
+ * dashboard amministrativa (sono gli stessi statistics_service, chiamati con
+ * l'id dell'utente del token - vedi apps/api/app/api/v1/portal_statistics.py),
+ * quindi si importano da @/types/api. Ridichiararle qui creerebbe una seconda
+ * definizione della stessa risposta, destinata a divergere.
+ */
 
 /**
  * Fetch a portal endpoint as the signed-in user.

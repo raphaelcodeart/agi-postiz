@@ -10,7 +10,7 @@ import { ErrorState } from "@/components/shared/error-state";
 import { SyncButton } from "@/components/shared/sync-button";
 import { PlatformIcon } from "@/components/shared/platform-badge";
 import { MetricMiniStat } from "@/components/shared/metric-mini-stat";
-import { MetricTrendChart } from "../../_components/metric-trend-chart";
+import { MetricTrendChart } from "@/components/shared/metric-trend-chart";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";

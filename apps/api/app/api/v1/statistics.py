@@ -1,9 +1,6 @@
-import io
 import uuid
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.v1.auth import get_current_admin
@@ -24,7 +21,7 @@ from app.schemas.schemas import (
 )
 from app.services import statistics_service
 from app.services.statistics_service import ALL_METRIC_COLUMNS
-from app.services.xlsx_export import build_xlsx
+from app.services.xlsx_export import METRIC_HEADERS, build_xlsx, metric_values, xlsx_response
 from app.tasks.statistics import (
     SyncBusyError,
     sync_all_statistics_task,
@@ -34,33 +31,6 @@ from app.tasks.statistics import (
 )
 
 router = APIRouter()
-
-METRIC_COLUMN_LABELS: dict[str, str] = {
-    "reactions": "Reazioni",
-    "likes": "Mi piace (Facebook)",
-    "views": "Visualizzazioni",
-    "impressions": "Impression",
-    "reach": "Copertura",
-    "follows": "Nuovi iscritti",
-    "clicks": "Clic",
-    "comments": "Commenti",
-    "shares": "Condivisioni",
-    "engagement_rate": "Tasso di coinvolgimento (%)",
-}
-METRIC_HEADERS: list[str] = [METRIC_COLUMN_LABELS[c] for c in ALL_METRIC_COLUMNS]
-
-
-def _metric_values(totals: dict[str, Any]) -> list[Any]:
-    return [totals.get(c) for c in ALL_METRIC_COLUMNS]
-
-
-def _xlsx_response(content: bytes, filename: str) -> StreamingResponse:
-    return StreamingResponse(
-        io.BytesIO(content),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
 
 # ==============================================================================
 # Dashboard / drill-down (sola lettura sui dati gia' sincronizzati)
@@ -202,13 +172,13 @@ def export_dashboard_xlsx(db: Session = Depends(get_db), admin: Administrator = 
             u["company_name"] or "",
             u["channel_count"],
             u["post_count"],
-            *_metric_values(u["totals"]),
+            *metric_values(u["totals"]),
             u["last_synced_at"],
         ]
         for u in data["users"]
     ]
     content = build_xlsx("Statistiche generali", headers, rows)
-    return _xlsx_response(content, "statistiche-generali.xlsx")
+    return xlsx_response(content, "statistiche-generali.xlsx")
 
 
 @router.get("/export/users/{user_id}.xlsx")
@@ -226,14 +196,14 @@ def export_user_xlsx(
             c["username"] or "",
             c["platform"],
             c["post_count"],
-            *_metric_values(c["totals"]),
+            *metric_values(c["totals"]),
             c["last_synced_at"],
         ]
         for c in data["channels"]
     ]
     content = build_xlsx("Statistiche utente", headers, rows)
     filename = f"statistiche-{data['user_name'].replace(' ', '-').lower()}.xlsx"
-    return _xlsx_response(content, filename)
+    return xlsx_response(content, filename)
 
 
 @router.get("/export/users/{user_id}/channels/{channel_id}.xlsx")
@@ -254,11 +224,11 @@ def export_channel_xlsx(
             p["platform"],
             p["published_at"],
             p["external_post_url"] or "",
-            *_metric_values(p["metrics"]),
+            *metric_values(p["metrics"]),
             p["last_synced_at"],
         ]
         for p in data["posts"]
     ]
     content = build_xlsx("Post del canale", headers, rows)
     filename = f"statistiche-{data['channel_name'].replace(' ', '-').lower()}.xlsx"
-    return _xlsx_response(content, filename)
+    return xlsx_response(content, filename)
