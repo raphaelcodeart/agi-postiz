@@ -33,6 +33,7 @@ from app.models.omnichannel import (
     OmniTag,
     omni_conversation_tags,
 )
+from app.integrations.omnichannel.connectors.maytapi import MaytapiConnector
 from app.integrations.omnichannel.connectors.registry import get_connector, SUPPORTED_CHANNELS
 from app.integrations.omnichannel.connectors.telegram import TelegramConnector
 from app.integrations.omnichannel.exceptions import ConnectorError
@@ -170,20 +171,38 @@ def get_channel_account_status(account_id: uuid.UUID, db: Session = Depends(get_
 @router.post("/channel-accounts/{account_id}/register-webhook")
 def register_channel_webhook(account_id: uuid.UUID, public_base_url: str, db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
     """
-    Points the channel provider at our webhook endpoint. Only meaningful for
-    Telegram right now (the only real connector) - WhatsApp/Instagram/
-    Facebook webhook registration happens through the Meta App dashboard,
-    outside this API, once those connectors are implemented for real.
+    Points the channel provider at our webhook endpoint.
+
+    Only two channels can do this from here: Telegram (setWebhook) and
+    WhatsApp-via-Maytapi (setWebhook). Facebook/Instagram/WhatsApp Cloud API
+    are registered by hand in the Meta App dashboard instead - Meta has no
+    API to subscribe a webhook, it's a screen - which is what the "Info
+    webhook" dialog in the channels list exists to support.
+
+    Maytapi's URL carries the account's webhook_secret as a path segment,
+    Telegram's doesn't: Telegram sends the secret back in a header on every
+    request, Maytapi signs nothing at all, so for it the URL is the only
+    place a secret can live. See connectors/maytapi.py.
     """
     account = _owned_channel_account(db, admin, account_id)
-    if account.channel != "telegram":
-        raise HTTPException(status_code=400, detail="La registrazione automatica del webhook è disponibile solo per Telegram in questa versione")
+    if account.channel not in ("telegram", "whatsapp_maytapi"):
+        raise HTTPException(
+            status_code=400,
+            detail="La registrazione automatica del webhook è disponibile solo per Telegram e WhatsApp (Maytapi). Per i canali Meta usa \"Info webhook\" e incolla URL e token nella dashboard dell'app.",
+        )
 
     connector = get_connector(account)
-    if not isinstance(connector, TelegramConnector):
-        raise HTTPException(status_code=400, detail="Connettore non valido per questo canale")
+    base = f"{public_base_url.rstrip('/')}{settings.API_V1_STR}/omnichannel-responder/webhooks"
 
-    webhook_url = f"{public_base_url.rstrip('/')}{settings.API_V1_STR}/omnichannel-responder/webhooks/telegram/{account.id}"
+    if account.channel == "telegram":
+        if not isinstance(connector, TelegramConnector):
+            raise HTTPException(status_code=400, detail="Connettore non valido per questo canale")
+        webhook_url = f"{base}/telegram/{account.id}"
+    else:
+        if not isinstance(connector, MaytapiConnector):
+            raise HTTPException(status_code=400, detail="Connettore non valido per questo canale")
+        webhook_url = f"{base}/maytapi/{account.id}/{account.webhook_secret}"
+
     try:
         connector.register_webhook(webhook_url)
     except ConnectorError as e:

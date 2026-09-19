@@ -6,6 +6,7 @@ from app.integrations.omnichannel.connectors.telegram import TelegramConnector
 from app.integrations.omnichannel.connectors.facebook import FacebookConnector
 from app.integrations.omnichannel.connectors.instagram import InstagramConnector
 from app.integrations.omnichannel.connectors.whatsapp import WhatsAppConnector
+from app.integrations.omnichannel.connectors.maytapi import MaytapiConnector
 from app.integrations.omnichannel.connectors.gmail import GmailConnector
 from app.models.omnichannel import OmniChannelAccount
 
@@ -13,6 +14,10 @@ _CONNECTOR_CLASSES: dict[str, Type[Connector]] = {
     "mock": MockConnector,
     "telegram": TelegramConnector,
     "whatsapp": WhatsAppConnector,
+    # Numero WhatsApp normale collegato via QR dalla console Maytapi, distinto
+    # da "whatsapp" (Cloud API ufficiale di Meta, numero business + App Review)
+    # - vedi il docstring di connectors/maytapi.py per il perche' convivono.
+    "whatsapp_maytapi": MaytapiConnector,
     "instagram": InstagramConnector,
     "facebook": FacebookConnector,
     "gmail": GmailConnector,

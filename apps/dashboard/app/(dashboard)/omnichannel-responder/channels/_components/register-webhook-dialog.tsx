@@ -8,8 +8,26 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useRegisterChannelWebhook } from "@/hooks/use-omnichannel";
 import { ApiError } from "@/lib/api/client";
+import type { OmniChannel } from "@/types/api";
 
-export function RegisterWebhookDialog({ open, onOpenChange, channelAccountId }: { open: boolean; onOpenChange: (open: boolean) => void; channelAccountId: string }) {
+/**
+ * Registra il webhook presso il provider, per i due canali che espongono una
+ * setWebhook chiamabile da qui: Telegram e WhatsApp via Maytapi. I canali Meta
+ * non passano da questo dialog - il loro webhook si incolla a mano nella
+ * dashboard dell'app, vedi MetaWebhookInfoDialog.
+ */
+export function RegisterWebhookDialog({
+  open,
+  onOpenChange,
+  channelAccountId,
+  channel,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  channelAccountId: string;
+  channel: OmniChannel;
+}) {
+  const isMaytapi = channel === "whatsapp_maytapi";
   const [publicBaseUrl, setPublicBaseUrl] = useState("");
   const registerWebhook = useRegisterChannelWebhook();
 
@@ -18,7 +36,7 @@ export function RegisterWebhookDialog({ open, onOpenChange, channelAccountId }: 
       { id: channelAccountId, publicBaseUrl },
       {
         onSuccess: () => {
-          toast.success("Webhook Telegram registrato");
+          toast.success(isMaytapi ? "Webhook Maytapi registrato" : "Webhook Telegram registrato");
           onOpenChange(false);
         },
         onError: (err) => toast.error(err instanceof ApiError ? err.message : "Impossibile registrare il webhook"),
@@ -30,9 +48,11 @@ export function RegisterWebhookDialog({ open, onOpenChange, channelAccountId }: 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Registra webhook Telegram</DialogTitle>
+          <DialogTitle>{isMaytapi ? "Registra webhook Maytapi" : "Registra webhook Telegram"}</DialogTitle>
           <DialogDescription>
-            Inserisci l&apos;URL pubblico HTTPS di questa API (es. quello del vhost api.* configurato in nginx) - Telegram invierà lì i messaggi in arrivo.
+            Inserisci l&apos;URL pubblico HTTPS di questa API (es. quello del vhost api.* configurato in nginx):{" "}
+            {isMaytapi ? "Maytapi" : "Telegram"} invierà lì i messaggi in arrivo.
+            {isMaytapi && " Il webhook Maytapi vale per l'intera istanza: registrandolo sostituisci quello di tutti i numeri dello stesso Product ID."}
           </DialogDescription>
         </DialogHeader>
 

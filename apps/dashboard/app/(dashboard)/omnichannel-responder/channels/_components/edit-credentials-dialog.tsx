@@ -18,6 +18,7 @@ const TOKEN_LABEL: Record<string, string> = {
   facebook: "Page Access Token",
   instagram: "Page/IG Access Token",
   whatsapp: "Access Token (Cloud API)",
+  whatsapp_maytapi: "API Token (Maytapi)",
   gmail: "App Password",
 };
 
@@ -42,6 +43,11 @@ export function EditCredentialsDialog({
   const updateChannelAccount = useUpdateChannelAccount();
   const isMeta = META_CHANNELS.includes(account.channel);
   const isGmail = account.channel === "gmail";
+  const isMaytapi = account.channel === "whatsapp_maytapi";
+  // Product ID e Phone ID non sono segreti, quindi - a differenza del token -
+  // quelli salvati si possono mostrare e ripartono precompilati.
+  const [productId, setProductId] = useState(String(account.config?.product_id ?? ""));
+  const [phoneId, setPhoneId] = useState(String(account.config?.phone_id ?? ""));
 
   function handleSubmit() {
     updateChannelAccount.mutate(
@@ -51,6 +57,7 @@ export function EditCredentialsDialog({
           access_token: accessToken || undefined,
           app_secret: isMeta ? appSecret || undefined : undefined,
           external_account_id: account.channel === "whatsapp" || isGmail ? externalAccountId : undefined,
+          config: isMaytapi ? { product_id: productId.trim(), phone_id: phoneId.trim() } : undefined,
         },
       },
       {
@@ -83,6 +90,18 @@ export function EditCredentialsDialog({
             <div className="space-y-1.5">
               <Label>Phone Number ID</Label>
               <Input value={externalAccountId} onChange={(e) => setExternalAccountId(e.target.value)} placeholder="Da WhatsApp Manager" />
+            </div>
+          )}
+          {isMaytapi && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label>Product ID</Label>
+                <Input value={productId} onChange={(e) => setProductId(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Phone ID</Label>
+                <Input value={phoneId} onChange={(e) => setPhoneId(e.target.value)} />
+              </div>
             </div>
           )}
           {isGmail && (

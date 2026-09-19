@@ -1,11 +1,17 @@
 """
 Inbound entrypoints for the Omnichannel Responder: the real Telegram,
-Facebook Messenger, Instagram Direct and WhatsApp webhooks (unauthenticated
-- no provider can send our JWT, each verified its own way, see
-TelegramConnector/FacebookConnector/WhatsAppConnector.verify_webhook) and
-the admin-only "simulate message" dev tool (spec section 51), which only
-works against channel_accounts of type 'mock' so it can never be pointed at
-a real customer channel by mistake.
+Facebook Messenger, Instagram Direct, WhatsApp (Meta Cloud API) and
+WhatsApp-via-Maytapi webhooks (unauthenticated - no provider can send our
+JWT, each verified its own way, see TelegramConnector/FacebookConnector/
+WhatsAppConnector/MaytapiConnector.verify_webhook) and the admin-only
+"simulate message" dev tool (spec section 51), which only works against
+channel_accounts of type 'mock' so it can never be pointed at a real
+customer channel by mistake.
+
+Three verification schemes, one per provider family: Telegram echoes a
+secret in a header, Meta signs the body (X-Hub-Signature-256), Maytapi does
+neither - so its secret travels in the URL path instead (see its route at
+the bottom of this file).
 
 Facebook/Instagram/WhatsApp all share the exact same Meta webhook
 subscription mechanics (GET handshake with hub.mode/hub.verify_token/
@@ -143,6 +149,52 @@ async def whatsapp_webhook_verify(channel_account_id: uuid.UUID, request: Reques
 @router.post("/webhooks/whatsapp/{channel_account_id}")
 async def whatsapp_webhook_receive(channel_account_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
     return await _meta_webhook_receive("whatsapp", channel_account_id, request, db)
+
+
+@router.post("/webhooks/maytapi/{channel_account_id}/{webhook_secret}")
+async def maytapi_webhook(
+    channel_account_id: uuid.UUID,
+    webhook_secret: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    WhatsApp via Maytapi - numero personale collegato via QR, non la Cloud API
+    di Meta (vedi connectors/maytapi.py).
+
+    Il segreto sta nel **path** e non in un header, a differenza di ogni altro
+    webhook di questo file: Maytapi non firma il payload e il suo `/setWebhook`
+    accetta un URL e basta, quindi l'URL e' l'unico posto dove un segreto puo'
+    viaggiare. E' esattamente l'uso per cui `OmniChannelAccount.webhook_secret`
+    era nato (vedi il commento sulla colonna in models/omnichannel.py).
+
+    Il confronto passa comunque da `connector.verify_webhook`, a tempo costante,
+    e il 404 e' identico che l'account non esista o che il canale non combaci -
+    mai confermare un channel_account_id a un chiamante non autenticato.
+    """
+    account = db.query(OmniChannelAccount).filter(
+        OmniChannelAccount.id == channel_account_id,
+        OmniChannelAccount.channel == "whatsapp_maytapi",
+    ).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    connector = get_connector(account)
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    if not connector.verify_webhook(headers, webhook_secret):
+        raise HTTPException(status_code=403, detail="Webhook verification failed")
+
+    if account.status == "disabled":
+        # Canale spento dall'amministratore: si conferma la ricezione (altrimenti
+        # Maytapi ritenta) ma non si ingerisce nulla. Dopo la verifica del
+        # segreto, mai prima, cosi' questo non diventa un modo per sapere se un
+        # canale e' disattivo senza conoscerlo.
+        return {"ok": True}
+
+    payload = await request.json()
+    messages = connector.parse_webhook(payload)
+    _ingest_and_trigger(db, account, messages)
+    return {"ok": True}
 
 
 @router.post("/dev/simulate-message", response_model=OmniMessageResponse, status_code=status.HTTP_201_CREATED)

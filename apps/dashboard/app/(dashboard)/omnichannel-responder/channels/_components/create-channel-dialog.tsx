@@ -16,7 +16,8 @@ const CHANNEL_OPTIONS: { value: OmniChannel; label: string; available: boolean }
   { value: "telegram", label: "Telegram", available: true },
   { value: "facebook", label: "Facebook Messenger", available: true },
   { value: "instagram", label: "Instagram Direct", available: true },
-  { value: "whatsapp", label: "WhatsApp Business", available: true },
+  { value: "whatsapp", label: "WhatsApp Business (Cloud API Meta)", available: true },
+  { value: "whatsapp_maytapi", label: "WhatsApp — numero personale (Maytapi)", available: true },
   { value: "gmail", label: "Gmail", available: true },
   { value: "mock", label: "Test (mock, nessun account reale)", available: true },
 ];
@@ -39,9 +40,12 @@ export function CreateChannelDialog({ open, onOpenChange }: { open: boolean; onO
   const [appSecret, setAppSecret] = useState("");
   const [phoneNumberId, setPhoneNumberId] = useState("");
   const [gmailAddress, setGmailAddress] = useState("");
+  const [productId, setProductId] = useState("");
+  const [phoneId, setPhoneId] = useState("");
   const createChannelAccount = useCreateChannelAccount();
   const isMeta = META_CHANNELS.includes(channel);
   const isGmail = channel === "gmail";
+  const isMaytapi = channel === "whatsapp_maytapi";
 
   function reset() {
     setChannel("telegram");
@@ -50,6 +54,8 @@ export function CreateChannelDialog({ open, onOpenChange }: { open: boolean; onO
     setAppSecret("");
     setPhoneNumberId("");
     setGmailAddress("");
+    setProductId("");
+    setPhoneId("");
   }
 
   function handleSubmit() {
@@ -59,6 +65,14 @@ export function CreateChannelDialog({ open, onOpenChange }: { open: boolean; onO
     }
     if (isGmail && (!gmailAddress.trim() || !accessToken.trim())) {
       toast.error("Inserisci indirizzo Gmail e App Password");
+      return;
+    }
+    // Maytapi, a differenza dei canali Meta, non ha il problema di dover
+    // esistere prima di poter recuperare le credenziali: Product ID, Phone ID e
+    // token stanno tutti sulla stessa pagina della console, prima di venire
+    // qui. Quindi si chiedono subito, e il canale nasce già funzionante.
+    if (isMaytapi && (!productId.trim() || !phoneId.trim() || !accessToken.trim())) {
+      toast.error("Inserisci Product ID, Phone ID e API Token di Maytapi");
       return;
     }
     // Credentials are optional at creation time for Meta channels (Facebook/
@@ -77,6 +91,10 @@ export function CreateChannelDialog({ open, onOpenChange }: { open: boolean; onO
         access_token: accessToken || undefined,
         app_secret: isMeta ? appSecret : undefined,
         external_account_id: channel === "whatsapp" ? phoneNumberId : isGmail ? gmailAddress : undefined,
+        // Product ID e Phone ID non sono segreti (indirizzano quale istanza e
+        // quale numero usare, come il Phone Number ID della Cloud API) quindi
+        // vanno in `config`, in chiaro, e non nel blob cifrato col token.
+        config: isMaytapi ? { product_id: productId.trim(), phone_id: phoneId.trim() } : undefined,
       },
       {
         onSuccess: () => {
@@ -128,6 +146,35 @@ export function CreateChannelDialog({ open, onOpenChange }: { open: boolean; onO
               <PasswordInput value={accessToken} onChange={(e) => setAccessToken(e.target.value)} placeholder="123456:ABC-DEF..." />
               <p className="text-xs text-muted-foreground">
                 Crealo con @BotFather su Telegram. Dopo la creazione, registra il webhook dalla lista canali.
+              </p>
+            </div>
+          )}
+
+          {isMaytapi && (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label>Product ID</Label>
+                  <Input value={productId} onChange={(e) => setProductId(e.target.value)} placeholder="es. 1a2b3c4d-..." />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Phone ID</Label>
+                  <Input value={phoneId} onChange={(e) => setPhoneId(e.target.value)} placeholder="es. 12345" />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label>API Token</Label>
+                <PasswordInput value={accessToken} onChange={(e) => setAccessToken(e.target.value)} placeholder="Token Maytapi" />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Tutti e tre si trovano in console.maytapi.com → Settings → Token. Il numero va prima
+                collegato via QR code dalla console, come si fa con WhatsApp Web. Dopo aver creato il
+                canale, premi <span className="font-medium">Registra webhook</span> nella lista per far
+                arrivare qui i messaggi.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                A differenza di WhatsApp Business (Cloud API), qui il numero è uno normale e non ci sono
+                né verifica aziendale né template approvati: si risponde liberamente, anche oltre le 24 ore.
               </p>
             </div>
           )}

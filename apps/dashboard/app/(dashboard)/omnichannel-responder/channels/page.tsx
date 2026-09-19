@@ -23,6 +23,10 @@ import { EditCredentialsDialog } from "./_components/edit-credentials-dialog";
 import type { OmniChannel } from "@/types/api";
 
 const META_CHANNELS: OmniChannel[] = ["facebook", "instagram", "whatsapp"];
+// I canali il cui provider espone una setWebhook che possiamo chiamare noi.
+// Per i Meta non esiste: il webhook si registra a mano nella dashboard
+// dell'app, ed è il motivo per cui esiste il dialog "Info webhook".
+const SELF_REGISTERING_WEBHOOK_CHANNELS: OmniChannel[] = ["telegram", "whatsapp_maytapi"];
 
 export default function OmnichannelChannelsPage() {
   const { data: accounts, isLoading } = useChannelAccounts();
@@ -37,6 +41,7 @@ export default function OmnichannelChannelsPage() {
   const [deleteAccountId, setDeleteAccountId] = useState<string | null>(null);
   const [editCredentialsAccountId, setEditCredentialsAccountId] = useState<string | null>(null);
   const metaInfoAccount = accounts?.find((a) => a.id === metaInfoAccountId);
+  const webhookAccount = accounts?.find((a) => a.id === webhookAccountId);
   const editCredentialsAccount = accounts?.find((a) => a.id === editCredentialsAccountId);
 
   return (
@@ -108,7 +113,11 @@ export default function OmnichannelChannelsPage() {
                   <TableCell className="text-muted-foreground">{formatDateTime(account.created_at)}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      {account.channel === "telegram" && (
+                      {/* Gli unici due provider che espongono una setWebhook da
+                          chiamare: per i canali Meta il webhook si registra a
+                          mano nella dashboard dell'app (bottone "Info webhook"
+                          qui accanto). */}
+                      {SELF_REGISTERING_WEBHOOK_CHANNELS.includes(account.channel) && (
                         <Button size="icon-sm" variant="ghost" title="Registra webhook" onClick={() => setWebhookAccountId(account.id)}>
                           <WebhookIcon />
                         </Button>
@@ -160,8 +169,13 @@ export default function OmnichannelChannelsPage() {
       )}
 
       <CreateChannelDialog open={createOpen} onOpenChange={setCreateOpen} />
-      {webhookAccountId && (
-        <RegisterWebhookDialog open={!!webhookAccountId} onOpenChange={(open) => !open && setWebhookAccountId(null)} channelAccountId={webhookAccountId} />
+      {webhookAccount && (
+        <RegisterWebhookDialog
+          open={!!webhookAccountId}
+          onOpenChange={(open) => !open && setWebhookAccountId(null)}
+          channelAccountId={webhookAccount.id}
+          channel={webhookAccount.channel}
+        />
       )}
       {simulateAccountId && (
         <SimulateMessageDialog open={!!simulateAccountId} onOpenChange={(open) => !open && setSimulateAccountId(null)} channelAccountId={simulateAccountId} />
