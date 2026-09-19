@@ -658,8 +658,23 @@ class ProductionBundleSocialClient(BaseBufferClient):
         if not items:
             return {"metrics": [], "metrics_updated_at": None, "provider": "bundle_social", **published_state}
 
-        # Latest snapshot: the API appends a row per refresh.
-        latest = items[-1]
+        # bundle.social refreshes a post's analytics roughly once a day and
+        # returns every snapshot it has ever taken - NEWEST FIRST, not appended
+        # at the end. Taking items[-1] therefore picked the OLDEST snapshot:
+        # the one written seconds after publishing, when a post has by
+        # definition seen nothing yet. Every metric read back as 0, the sync
+        # reported success, and nothing said why - a post at 69 views was
+        # stored as 65 (its day-one figure) and stopped moving. Verified
+        # against the live API on 2026-09-14.
+        #
+        # Ordering is not re-assumed in the other direction: pick the snapshot
+        # with the newest timestamp and fall back to the first item only when
+        # none of them carry one, so a change in their ordering cannot quietly
+        # bring the stale-figure bug back.
+        latest = max(
+            items,
+            key=lambda item: (item.get("updatedAt") or item.get("createdAt") or ""),
+        )
 
         mapping = {
             "likes": latest.get("likes"),

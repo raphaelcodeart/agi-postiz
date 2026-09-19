@@ -565,3 +565,61 @@ def test_an_unrecognised_error_is_left_alone(monkeypatch):
 
     assert excinfo.value.message == "Qualcosa di completamente nuovo"
     assert excinfo.value.category == "validation_failed"
+
+
+def test_metrics_come_from_the_newest_snapshot_not_the_first_listed(monkeypatch):
+    """bundle.social returns every analytics snapshot it has taken, NEWEST
+    FIRST. Reading items[-1] took the oldest one - written seconds after
+    publishing, when every counter is still 0 - so the dashboard showed a post
+    frozen at its day-one figures while the provider had current ones.
+
+    Fixture shaped from the live response for a real Instagram post on
+    2026-09-14: six daily snapshots, 65 views on day one, 69 today.
+    """
+    client = _client()
+    monkeypatch.setattr(
+        client, "_request",
+        lambda *a, **k: {
+            "post": {"status": "POSTED"},
+            "profilePost": {"publishedAt": "2026-09-08T13:14:56.043Z"},
+            "items": [
+                {"createdAt": "2026-09-14T13:21:53.363Z", "updatedAt": "2026-09-14T13:21:53.363Z",
+                 "views": 69, "impressions": 69, "impressionsUnique": 41, "likes": 1, "comments": 0, "shares": 0},
+                {"createdAt": "2026-09-10T13:17:22.055Z", "updatedAt": "2026-09-10T13:17:22.055Z",
+                 "views": 68, "impressions": 68, "impressionsUnique": 40, "likes": 1, "comments": 0, "shares": 0},
+                {"createdAt": "2026-09-09T13:15:43.276Z", "updatedAt": "2026-09-09T13:15:43.276Z",
+                 "views": 65, "impressions": 65, "impressionsUnique": 39, "likes": 1, "comments": 0, "shares": 0},
+            ],
+        },
+    )
+
+    result = client.get_post_metrics("k", "p1", platform="instagram")
+    by_type = {m["type"]: m["value"] for m in result["metrics"]}
+
+    assert by_type["views"] == 69
+    assert by_type["impressions"] == 69
+    assert by_type["reach"] == 41
+    assert result["metrics_updated_at"] == "2026-09-14T13:21:53.363Z"
+
+
+def test_the_newest_snapshot_wins_whatever_order_the_api_lists_them_in(monkeypatch):
+    """The fix must not simply swap one positional assumption for the other:
+    the same figures have to come back if the provider ever lists them
+    oldest-first instead."""
+    client = _client()
+    monkeypatch.setattr(
+        client, "_request",
+        lambda *a, **k: {
+            "post": {"status": "POSTED"},
+            "profilePost": {},
+            "items": [
+                {"createdAt": "2026-09-09T13:15:43.276Z", "updatedAt": "2026-09-09T13:15:43.276Z", "views": 65},
+                {"createdAt": "2026-09-14T13:21:53.363Z", "updatedAt": "2026-09-14T13:21:53.363Z", "views": 69},
+                {"createdAt": "2026-09-10T13:17:22.055Z", "updatedAt": "2026-09-10T13:17:22.055Z", "views": 68},
+            ],
+        },
+    )
+
+    result = client.get_post_metrics("k", "p1", platform="instagram")
+
+    assert {m["type"]: m["value"] for m in result["metrics"]}["views"] == 69
