@@ -6,8 +6,11 @@ import {
   HeartIcon,
   InfoIcon,
   Link2Icon,
+  MousePointerClickIcon,
+  PercentIcon,
   SendIcon,
   TrendingUpIcon,
+  UserPlusIcon,
   UsersIcon,
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -21,6 +24,7 @@ import {
   type PortalOverview,
   type PortalUser,
 } from "@/lib/portal/server";
+import { StatTile, formatCompact, formatExact, formatPercent } from "../_shared/stat-tile";
 import { ActivityChart } from "./activity-chart";
 import { LineupSpotlight } from "./lineup-spotlight";
 
@@ -38,52 +42,6 @@ export const dynamic = "force-dynamic";
  * navigation (portal-nav.tsx), where they are reachable from every page rather
  * than only this one.
  */
-
-const numberFormat = new Intl.NumberFormat("it-IT");
-const compactFormat = new Intl.NumberFormat("it-IT", { notation: "compact", maximumFractionDigits: 1 });
-
-function formatCompact(value: number): string {
-  return value >= 10_000 ? compactFormat.format(value) : numberFormat.format(value);
-}
-
-/**
- * Headline figure. The icon repeats the metric's meaning for someone scanning
- * the row rather than reading it.
- */
-function StatTile({
-  label,
-  value,
-  icon: Icon,
-  hint,
-  tone = "default",
-}: {
-  label: string;
-  value: string;
-  icon: React.ComponentType<{ className?: string }>;
-  hint?: string;
-  tone?: "default" | "accent";
-}) {
-  return (
-    <div
-      className={
-        "group relative overflow-hidden rounded-xl border bg-card p-4 transition-shadow hover:shadow-md " +
-        (tone === "accent" ? "border-primary/30" : "")
-      }
-    >
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{label}</p>
-        <Icon
-          className={
-            "size-4 shrink-0 transition-transform group-hover:scale-110 " +
-            (tone === "accent" ? "text-primary" : "text-muted-foreground")
-          }
-        />
-      </div>
-      <p className="mt-2 text-2xl font-semibold tabular-nums">{value}</p>
-      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
-    </div>
-  );
-}
 
 function SectionHeading({
   icon: Icon,
@@ -126,6 +84,38 @@ export default async function PortalDashboardPage() {
   const recentCampaigns = (campaigns ?? []).slice(0, 4);
   const engagement = stats ? stats.total_likes + stats.total_comments + stats.total_shares : 0;
   const hasResults = Boolean(stats && stats.posts_published > 0);
+
+  /**
+   * Metriche che non tutte le piattaforme riportano: una tile a zero direbbe
+   * "nessun nuovo iscritto" dove la verita' e' "questo social non lo dice", per
+   * cui compaiono solo quando c'e' davvero qualcosa. Il quadro completo, con
+   * tutte le metriche e il dettaglio per canale e per post, sta in
+   * /portal/statistics.
+   */
+  const extraTiles = stats
+    ? [
+        stats.total_follows > 0 && {
+          key: "follows",
+          label: "Nuovi iscritti",
+          value: formatCompact(stats.total_follows),
+          icon: UserPlusIcon,
+        },
+        stats.total_clicks > 0 && {
+          key: "clicks",
+          label: "Clic",
+          value: formatCompact(stats.total_clicks),
+          icon: MousePointerClickIcon,
+        },
+        stats.engagement_rate !== null && {
+          key: "engagement_rate",
+          label: "Coinvolgimento",
+          value: formatPercent(stats.engagement_rate),
+          icon: PercentIcon,
+        },
+      ].filter((tile): tile is { key: string; label: string; value: string; icon: typeof UserPlusIcon } =>
+        Boolean(tile)
+      )
+    : [];
 
   return (
     <div className="flex flex-col gap-8">
@@ -184,7 +174,13 @@ export default async function PortalDashboardPage() {
 
       {stats && (
         <section className="flex flex-col gap-3">
-          <SectionHeading icon={TrendingUpIcon}>I tuoi risultati</SectionHeading>
+          <SectionHeading
+            icon={TrendingUpIcon}
+            href={hasResults ? "/portal/statistics" : undefined}
+            linkLabel="Statistiche complete"
+          >
+            I tuoi risultati
+          </SectionHeading>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <StatTile
               label="Visualizzazioni"
@@ -202,14 +198,17 @@ export default async function PortalDashboardPage() {
               label="Interazioni"
               value={formatCompact(engagement)}
               icon={HeartIcon}
-              hint={`${numberFormat.format(stats.total_shares)} condivisioni`}
+              hint={`${formatExact(stats.total_shares)} condivisioni`}
             />
             <StatTile
               label="Post pubblicati"
-              value={numberFormat.format(stats.posts_published)}
+              value={formatExact(stats.posts_published)}
               icon={SendIcon}
               hint={stats.posts_failed > 0 ? `${stats.posts_failed} non riusciti` : undefined}
             />
+            {extraTiles.map((tile) => (
+              <StatTile key={tile.key} label={tile.label} value={tile.value} icon={tile.icon} />
+            ))}
           </div>
           {/* Says why the numbers are what they are, instead of leaving a wall of
               zeroes looking like something is broken. */}
@@ -242,7 +241,7 @@ export default async function PortalDashboardPage() {
                   <PlatformIcon platform={channel.platform} className="size-8 shrink-0" />
                   <span className="min-w-0 flex-1 truncate font-medium">{channel.name}</span>
                   <span className="text-sm text-muted-foreground tabular-nums">
-                    {numberFormat.format(channel.posts)} post
+                    {formatExact(channel.posts)} post
                   </span>
                   <span className="text-sm tabular-nums">
                     {formatCompact(channel.impressions)}{" "}

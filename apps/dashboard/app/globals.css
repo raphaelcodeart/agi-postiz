@@ -223,3 +223,388 @@
     animation: pulse-glow 1.8s ease-in-out infinite;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Portale promoter: tutta l'area /portal (accesso, registrazione, dashboard)
+   ---------------------------------------------------------------------------
+   Il portale segue deliberatamente il sistema grafico della landing pubblica
+   (agipost.mamify.ai), NON quello della dashboard amministrativa. Un promoter
+   arriva quasi sempre da quella pagina: un salto di stile a meta' strada fa
+   sembrare l'applicazione un altro prodotto, e su una schermata che chiede una
+   password quel dubbio costa iscrizioni. Lo stesso vale dopo l'accesso - la
+   dashboard del promoter e' la stessa promessa, mantenuta.
+
+   La dashboard amministrativa resta sul tema dell'app: la vediamo solo noi, e
+   non ha nessuno da convincere.
+
+   I valori qui sotto sono copiati dai token reali di assets/css/style.css della
+   landing (letti il 2026-09-14), non riprodotti a occhio.
+
+   Sono ridefinizioni dei token shadcn, non classi nuove: i componenti Input /
+   Label / Alert / Card continuano a funzionare come ovunque nell'app, ma dentro
+   questo scope prendono i colori della landing. La palette e' fissata sul tema
+   CHIARO anche sotto .dark (la landing non ha un tema scuro: seguire qui il
+   sistema operativo dell'utente vorrebbe dire mostrare due identita' diverse
+   della stessa pagina). Il resto della dashboard non e' toccato.
+   -------------------------------------------------------------------------- */
+.portal-skin,
+.dark .portal-skin {
+  /* Superfici e testo */
+  --pa-bg: #fbfaf8;
+  --pa-bg-tint: #f4f2ee;
+  --pa-surface: #ffffff;
+  --pa-ink: #14131a;
+  --pa-ink-2: #3a3844;
+  --pa-muted: #66636f;
+  --pa-line: rgba(20, 19, 26, 0.12);
+  --pa-line-soft: rgba(20, 19, 26, 0.07);
+
+  /* Accento: la landing sovrascrive il proprio rosso con questo viola */
+  --pa-accent: #6c5ce0;
+  --pa-accent-dark: #5344be;
+  --pa-accent-soft: rgba(108, 92, 224, 0.11);
+
+  /* Le 4 fermate del gradiente del marchio */
+  --pa-g1: #7c6bd8;
+  --pa-g2: #4fb3f5;
+  --pa-g3: #f2685e;
+  --pa-g4: #f6b25a;
+  --pa-gradient: linear-gradient(115deg, var(--pa-g1) 0%, var(--pa-g2) 34%, var(--pa-g3) 68%, var(--pa-g4) 100%);
+
+  --pa-r-s: 10px;
+  --pa-r-l: 24px;
+  --pa-shadow-m: 0 2px 6px rgba(20, 19, 26, 0.05), 0 12px 34px rgba(20, 19, 26, 0.08);
+  --pa-shadow-l: 0 8px 20px rgba(20, 19, 26, 0.07), 0 30px 70px rgba(20, 19, 26, 0.11);
+  --pa-ease: cubic-bezier(0.22, 0.68, 0.32, 1);
+
+  /* Token shadcn riagganciati a quelli sopra, cosi' i componenti condivisi
+     ereditano la palette della landing senza doverli riscrivere. */
+  --background: var(--pa-bg);
+  --foreground: var(--pa-ink);
+  --card: var(--pa-surface);
+  --card-foreground: var(--pa-ink);
+  --popover: var(--pa-surface);
+  --popover-foreground: var(--pa-ink);
+  --muted-foreground: var(--pa-muted);
+  --border: var(--pa-line);
+  --input: var(--pa-line);
+  --primary: var(--pa-accent);
+  --primary-foreground: #ffffff;
+  --ring: var(--pa-accent-soft);
+  --destructive: #e03127;
+
+  /* Anche le superfici "tenui" vanno riagganciate: senza, sotto .dark
+     restavano quelle scure dell'admin (bg-muted, bg-secondary, bg-accent...)
+     e ci finiva sopra testo scuro/grigio - illeggibile. */
+  --muted: var(--pa-bg-tint);
+  --secondary: var(--pa-bg-tint);
+  --secondary-foreground: var(--pa-ink);
+  --accent: var(--pa-accent-soft);
+  --accent-foreground: var(--pa-accent-dark);
+  --chart-1: var(--pa-accent);
+  color-scheme: light;
+
+  /* La landing lavora su raggi piu' generosi della dashboard (10/16/24 contro
+     i 12 di --radius): alzando la radice, le utility rounded-* gia' scritte
+     nelle pagine seguono da sole. */
+  --radius: 1rem;
+
+  /* Le quattro fermate del marchio al posto del viola->ciano dell'app, cosi'
+     .gradient-text e .bg-brand-gradient (usate nel portale) siano LO STESSO
+     gradiente del logo e della landing. */
+  --brand-from: var(--pa-g1);
+  --brand-via: var(--pa-g2);
+  --brand-to: var(--pa-g4);
+  --glow-primary: rgba(108, 92, 224, 0.28);
+
+  background: var(--pa-bg);
+  color: var(--pa-ink);
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -0.011em;
+}
+
+/* Azioni piene a pillola, come sulla landing. Solo quelle piene: i bottoni
+   fantasma/icona restano rettangolari, una pillola su un'icona quadrata
+   diventa un cerchio e si confonde con un avatar. */
+.portal-skin [data-slot="button"]:not([class*="rounded-"]) {
+  border-radius: 999px;
+}
+
+/* Le schede del portale prendono il bordo pieno della landing al posto
+   dell'anello sfumato della dashboard. */
+.portal-skin [data-slot="card"] {
+  --tw-ring-color: var(--pa-line);
+  border-radius: var(--pa-r-l);
+}
+
+/* Campi: 1.5px di bordo e anello morbido al focus, come .field input sulla
+   landing - non il bordo sottile della dashboard. */
+.portal-skin input:not([type="checkbox"]) {
+  height: auto;
+  padding: 0.76em 0.9em;
+  border: 1.5px solid var(--pa-line);
+  border-radius: var(--pa-r-s);
+  background: var(--pa-surface);
+  font-size: 0.97rem;
+  color: var(--pa-ink);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.portal-skin input:not([type="checkbox"]):focus,
+.portal-skin input:not([type="checkbox"]):focus-visible {
+  outline: none;
+  border-color: var(--pa-accent);
+  box-shadow: 0 0 0 4px var(--pa-accent-soft);
+}
+
+.portal-skin label {
+  font-size: 0.88rem;
+  font-weight: 620;
+  color: var(--pa-ink);
+}
+
+/* Il bottone a pillola della landing (.btn / .btn--red), con il sollevamento
+   di 2px all'hover. */
+.pa-btn {
+  display: inline-flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6em;
+  padding: 0.82em 1.5em;
+  border: 1.5px solid var(--pa-accent);
+  border-radius: 999px;
+  background: var(--pa-accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.96rem;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition: transform 0.3s var(--pa-ease), box-shadow 0.3s var(--pa-ease), background 0.2s,
+    border-color 0.2s;
+}
+.pa-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: var(--pa-shadow-m);
+  background: var(--pa-accent-dark);
+  border-color: var(--pa-accent-dark);
+}
+.pa-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+.pa-btn:focus-visible {
+  outline: 3px solid var(--pa-accent);
+  outline-offset: 3px;
+}
+.pa-btn:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* La scheda bianca: raggio 24px e bordo pieno della landing (.card), con il
+   filo di gradiente del marchio sul bordo superiore. */
+.pa-card {
+  position: relative;
+  overflow: hidden;
+  background: var(--pa-surface);
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-r-l);
+  box-shadow: var(--pa-shadow-l);
+}
+.pa-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: var(--pa-gradient);
+}
+
+.pa-gradient-text {
+  background: var(--pa-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Il titolo della landing: stretto e pesante, non il peso della dashboard. */
+.pa-title {
+  font-size: 1.65rem;
+  font-weight: 720;
+  line-height: 1.1;
+  letter-spacing: -0.033em;
+  color: var(--pa-ink);
+}
+
+/* Riquadro informativo con il filo colorato a sinistra (.notice) */
+.pa-notice {
+  border: 1px solid var(--pa-line);
+  border-left: 3px solid var(--pa-g2);
+  border-radius: var(--pa-r-s);
+  background: var(--pa-surface);
+  padding: 0.95em 1.1em;
+  font-size: 0.89rem;
+  color: var(--pa-ink-2);
+}
+.pa-notice--error {
+  border-left-color: var(--destructive);
+  color: var(--destructive);
+}
+
+.pa-link {
+  color: var(--pa-accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+.pa-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+/* Le tre macchie sfocate che danno alla landing la sua velatura pastello
+   (.deco/.shape in assets/css/style.css): senza di queste il fondo resta un
+   beige piatto e la parentela con la pagina di presentazione si perde. Valori
+   ammorbiditi rispetto all'originale - li' fanno da sfondo a un hero pieno,
+   qui devono restare dietro una scheda che e' il vero centro della pagina. */
+.pa-deco {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.pa-shape {
+  position: absolute;
+  border-radius: 50%;
+  opacity: 0.42;
+  filter: blur(46px);
+}
+.pa-shape--a {
+  width: min(46vw, 440px);
+  aspect-ratio: 1;
+  background: radial-gradient(circle at 32% 32%, rgba(124, 107, 216, 0.45), transparent 68%);
+  top: -14%;
+  right: -10%;
+}
+.pa-shape--b {
+  width: min(38vw, 360px);
+  aspect-ratio: 1;
+  background: radial-gradient(circle at 60% 40%, rgba(242, 104, 94, 0.28), transparent 66%);
+  bottom: -16%;
+  left: -9%;
+}
+.pa-shape--c {
+  width: min(28vw, 250px);
+  aspect-ratio: 1;
+  background: radial-gradient(circle at 50% 50%, rgba(79, 179, 245, 0.32), transparent 66%);
+  top: 34%;
+  left: 46%;
+}
+
+/* L'occhiello della landing (.mono-label): colore accento e trattino davanti,
+   non un grigio qualsiasi. */
+.pa-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55em;
+  font-size: 0.735rem;
+  font-weight: 640;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--pa-accent);
+}
+.pa-eyebrow::before {
+  content: "";
+  width: 20px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--pa-accent);
+}
+
+/* Marchio + parola, come nella barra di navigazione della landing */
+.pa-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 1.24rem;
+  font-weight: 700;
+  letter-spacing: -0.028em;
+  color: var(--pa-ink);
+  text-decoration: none;
+}
+
+/* Sotto i 420px l'occhiello, con la sua spaziatura fra lettere, arriva a
+   toccare i margini: rimpicciolito quanto basta a respirare. */
+@media (max-width: 420px) {
+  .pa-eyebrow {
+    font-size: 0.66rem;
+    letter-spacing: 0.1em;
+    gap: 0.4em;
+  }
+  .pa-eyebrow::before {
+    width: 14px;
+  }
+}
+
+/* Barra superiore del portale: velo chiaro sul fondo avorio, non il grigio
+   della dashboard. */
+.pa-header {
+  background: color-mix(in srgb, var(--pa-bg) 82%, transparent);
+  border-bottom: 1px solid var(--pa-line-soft);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* Barra di navigazione in basso sul telefono: stesso trattamento. */
+.pa-tabbar {
+  background: color-mix(in srgb, var(--pa-surface) 94%, transparent);
+  border-top: 1px solid var(--pa-line);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* Azione primaria: viola pieno, non il gradiente a quattro colori.
+   Il gradiente del marchio sulla landing sta sul logo e sui titoli grandi -
+   su un bottone di 150px le quattro fermate si schiacciano in una banda
+   arcobaleno che legge come un errore, non come identita'. Resta invece dov'e'
+   giusto: la barra di avanzamento in (app)/page.tsx lo usa ancora. */
+.portal-skin [data-slot="button"].bg-brand-gradient {
+  background: var(--pa-accent);
+  border-color: var(--pa-accent);
+  color: #fff;
+}
+.portal-skin [data-slot="button"].bg-brand-gradient:hover {
+  background: var(--pa-accent-dark);
+  border-color: var(--pa-accent-dark);
+  filter: none;
+}
+
+/* Le azioni del portale hanno l'altezza generosa della landing: i bottoni della
+   dashboard amministrativa sono alti 32px, dimensionati per una tabella fitta,
+   non per una pagina che un promoter apre dal telefono. */
+.portal-skin [data-slot="button"] {
+  height: auto;
+  min-height: 2.35rem;
+  padding-inline: 1.15rem;
+  font-weight: 600;
+}
+.portal-skin [data-slot="button"][class*="size-8"],
+.portal-skin [data-slot="button"][class*="size-7"],
+.portal-skin [data-slot="button"][class*="size-6"] {
+  min-height: 0;
+  padding-inline: 0;
+}
+
+/* Gli avvisi del portale prendono la forma di .notice della landing: filo
+   colorato a sinistra invece di un rettangolo bordato uniforme, cosi' si
+   distinguono dal contenuto senza urlare. Il colore del filo segue il tipo
+   dell'avviso. */
+.portal-skin [data-slot="alert"] {
+  border-color: var(--pa-line);
+  border-left: 3px solid var(--pa-g2);
+  border-radius: var(--pa-r-s);
+  background: var(--pa-surface);
+  padding: 0.85em 1em;
+}
+.portal-skin [data-slot="alert"][class*="destructive"] {
+  border-left-color: var(--destructive);
+}

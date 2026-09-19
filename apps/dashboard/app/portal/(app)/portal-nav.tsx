@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  BarChart3Icon,
   CalendarClockIcon,
+  LightbulbIcon,
   HistoryIcon,
   LayoutDashboardIcon,
   Link2Icon,
@@ -17,7 +19,9 @@ import { cn } from "@/lib/utils";
  *
  * Ordered by how often a promoter needs them, not by how the system is built.
  * "Palinsesto" sits second because it is the only section with a deadline
- * attached - miss it and a decision is made for you.
+ * attached - miss it and a decision is made for you. "Statistiche" follows it:
+ * the home already shows the headline figures, so this is where someone goes
+ * having decided to look properly, channel by channel and post by post.
  */
 export const PORTAL_SECTIONS: {
   href: string;
@@ -27,6 +31,8 @@ export const PORTAL_SECTIONS: {
 }[] = [
   { href: "/portal", label: "Riepilogo", icon: LayoutDashboardIcon, description: "I tuoi risultati" },
   { href: "/portal/lineup", label: "Palinsesto", icon: CalendarClockIcon, description: "Campagne in programma" },
+  { href: "/portal/proposals", label: "Proposte", icon: LightbulbIcon, description: "I contenuti che suggerisci" },
+  { href: "/portal/statistics", label: "Statistiche", icon: BarChart3Icon, description: "Risultati post per post" },
   { href: "/portal/channels", label: "Canali", icon: Link2Icon, description: "Profili collegati" },
   { href: "/portal/campaigns", label: "Storico", icon: HistoryIcon, description: "Campagne passate" },
 ];
@@ -54,10 +60,10 @@ export function PortalSidebar({ badges }: { badges?: Record<string, number> }) {
             href={section.href}
             aria-current={active ? "page" : undefined}
             className={cn(
-              "group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
+              "group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
               active
-                ? "bg-primary/10 font-medium text-primary"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                ? "bg-primary text-primary-foreground shadow-sm"
+                : "text-foreground/75 hover:bg-primary/10 hover:text-primary"
             )}
           >
             <section.icon className="size-4 shrink-0" />
@@ -66,7 +72,7 @@ export function PortalSidebar({ badges }: { badges?: Record<string, number> }) {
               <span
                 className={cn(
                   "rounded-full px-1.5 py-0.5 text-[0.7rem] leading-none font-medium tabular-nums",
-                  active ? "bg-primary/20 text-primary" : "bg-muted-foreground/15"
+                  active ? "bg-white/25 text-primary-foreground" : "bg-primary text-primary-foreground"
                 )}
               >
                 {badge}
@@ -89,7 +95,7 @@ export function PortalTabBar({ badges }: { badges?: Record<string, number> }) {
 
   return (
     <nav
-      className="fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 backdrop-blur lg:hidden"
+      className="pa-tabbar fixed inset-x-0 bottom-0 z-40 lg:hidden"
       aria-label="Sezioni"
     >
       <div className="mx-auto flex w-full max-w-5xl">
@@ -102,7 +108,7 @@ export function PortalTabBar({ badges }: { badges?: Record<string, number> }) {
               href={section.href}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "relative flex flex-1 flex-col items-center gap-1 px-1 py-2.5 text-[0.7rem] transition-colors",
+                "relative flex min-w-0 flex-1 flex-col items-center gap-1 px-1 py-2.5 text-[0.7rem] transition-colors",
                 active ? "text-primary" : "text-muted-foreground hover:text-foreground"
               )}
             >
@@ -114,7 +120,7 @@ export function PortalTabBar({ badges }: { badges?: Record<string, number> }) {
                   </span>
                 ) : null}
               </span>
-              <span className="truncate">{section.label}</span>
+              <span className="max-w-full truncate">{section.label}</span>
               {active && (
                 <span className="absolute inset-x-4 top-0 h-0.5 rounded-full bg-primary" />
               )}

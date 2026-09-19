@@ -1,11 +1,11 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { RssIcon } from "lucide-react";
 import {
   portalFetch,
   type PortalLineupCampaign,
   type PortalUser,
 } from "@/lib/portal/server";
+import { BrandMark, portalFont } from "../_shared/brand";
 import { PortalLogoutButton } from "./logout-button";
 import { PortalSidebar, PortalTabBar } from "./portal-nav";
 
@@ -20,6 +20,12 @@ import { PortalSidebar, PortalTabBar } from "./portal-nav";
  * Navigation is a left rail on desktop and a bottom bar on a phone. The header
  * keeps only identity - logo, name, sign out - so the sections stay in one
  * place instead of being a row of links that grows until it wraps.
+ *
+ * The whole group carries .portal-skin: the promoter's side of the product
+ * wears the public landing's design system (see the block of that name in
+ * app/globals.css), not the admin dashboard's. The pages below were already
+ * written against semantic tokens - bg-card, text-muted-foreground, text-primary
+ * - so re-pointing those tokens here restyles them without touching each one.
  */
 export default async function PortalAppLayout({ children }: { children: React.ReactNode }) {
   const user = await portalFetch<PortalUser>("me");
@@ -36,14 +42,12 @@ export default async function PortalAppLayout({ children }: { children: React.Re
   const badges = pendingDecisions > 0 ? { "/portal/lineup": pendingDecisions } : undefined;
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
-      <header className="sticky top-0 z-30 border-b bg-card/80 backdrop-blur">
+    <div className={`portal-skin ${portalFont.variable} flex min-h-screen flex-col`}>
+      <header className="pa-header sticky top-0 z-30">
         <div className="mx-auto flex w-full max-w-5xl items-center gap-4 px-4 py-3">
-          <Link href="/portal" className="flex items-center gap-2">
-            <span className="glow-primary flex size-8 items-center justify-center rounded-lg bg-brand-gradient text-primary-foreground">
-              <RssIcon className="size-4" />
-            </span>
-            <span className="gradient-text text-base font-semibold">Agi Post</span>
+          <Link href="/portal" className="pa-brand !text-[1.05rem]">
+            <BrandMark size={26} />
+            AGI Post
           </Link>
 
           <div className="ml-auto flex items-center gap-3">
