@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/sidebar";
 import { useLogout } from "@/hooks/use-auth";
 import { usePendingCount } from "@/hooks/use-omnichannel";
+import { useCampaignProposalsSummary } from "@/hooks/use-campaign-proposals";
 import {
   BOARD_NAV_ITEM,
   MAIN_NAV_ITEMS,
@@ -61,7 +62,12 @@ export function AppSidebar() {
   const logout = useLogout();
   const isSettingsActive = pathname.startsWith(SETTINGS_NAV_ITEM.href);
   const { data: pendingCount } = usePendingCount();
+  const { data: proposalsSummary } = useCampaignProposalsSummary();
   const omnichannelBadges = { "/omnichannel-responder": pendingCount?.count ?? 0 };
+  // Solo le proposte consegnate e ancora da decidere: una già approvata o
+  // rifiutata non è più lavoro che aspetta, e un pallino che resta acceso su
+  // cose fatte è un pallino che si impara a ignorare.
+  const campaignBadges = { "/campaign-proposals": proposalsSummary?.by_status?.submitted ?? 0 };
 
   return (
     <Sidebar collapsible="icon">
@@ -94,7 +100,7 @@ export function AppSidebar() {
         <SidebarGroup>
           <SidebarGroupLabel>Campagne Agi Post</SidebarGroupLabel>
           <SidebarGroupContent>
-            <NavItems items={[...MAIN_NAV_ITEMS, ...BUFFER_NAV_ITEMS]} pathname={pathname} />
+            <NavItems items={[...MAIN_NAV_ITEMS, ...BUFFER_NAV_ITEMS]} pathname={pathname} badgeCounts={campaignBadges} />
           </SidebarGroupContent>
         </SidebarGroup>
 

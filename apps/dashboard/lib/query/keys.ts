@@ -26,6 +26,11 @@ export const queryKeys = {
     lineup: (id: string) => ["campaigns", "lineup", id] as const,
     summary: () => ["campaigns", "summary"] as const,
   },
+  campaignProposals: {
+    list: (params?: unknown) => ["campaignProposals", "list", params] as const,
+    detail: (id: string) => ["campaignProposals", "detail", id] as const,
+    summary: () => ["campaignProposals", "summary"] as const,
+  },
   publications: {
     list: (params?: unknown) => ["publications", "list", params] as const,
     detail: (id: string) => ["publications", "detail", id] as const,

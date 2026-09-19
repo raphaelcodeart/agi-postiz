@@ -205,6 +205,12 @@ export interface CampaignCreatePayload {
   participation_mode: ParticipationMode;
   opt_out_deadline_at?: string | null;
   auto_launch_at_deadline: boolean;
+  /**
+   * Valorizzato quando l'amministratore sta approvando la proposta di un
+   * promoter: la proposta viene marcata approvata e collegata a questa campagna
+   * nella stessa transazione che la crea. Approvare È creare la campagna.
+   */
+  proposal_id?: string | null;
 }
 
 export interface CampaignResponse {
@@ -674,7 +680,18 @@ export interface BlogWriterDashboardResponse {
 // ==============================================================================
 // Omnichannel Responder (independent add-on module)
 // ==============================================================================
-export type OmniChannel = "telegram" | "whatsapp" | "instagram" | "facebook" | "gmail" | "mock";
+// "whatsapp" è la Cloud API ufficiale di Meta (numero business, App Review);
+// "whatsapp_maytapi" è un numero WhatsApp normale collegato via QR dalla console
+// Maytapi. Due canali distinti di proposito, non due nomi per la stessa cosa -
+// vedi apps/api/app/integrations/omnichannel/connectors/maytapi.py.
+export type OmniChannel =
+  | "telegram"
+  | "whatsapp"
+  | "whatsapp_maytapi"
+  | "instagram"
+  | "facebook"
+  | "gmail"
+  | "mock";
 
 export type OmniConversationStatus =
   | "NEW"
@@ -1048,4 +1065,63 @@ export interface PlatformSettingsUpdatePayload {
   affiliate_disclosure_text?: string | null;
   affiliate_disclosure_text_short?: string | null;
   auto_activate_new_users?: boolean | null;
+}
+
+
+// ==============================================================================
+// Proposte di campagna - contenuto suggerito da un promoter dal suo portale.
+// Tabella e ciclo di vita propri, separati da Campaign: vedi
+// apps/api/app/models/campaign_proposal.py.
+// ==============================================================================
+export type CampaignProposalStatus = "draft" | "submitted" | "approved" | "rejected";
+
+export interface CampaignProposalResponse {
+  id: string;
+  user_id: string;
+  /** Nome del promoter che l'ha scritta, appiattito dal backend. */
+  user_name: string | null;
+  title: string;
+  default_text: string;
+  /** Nota per l'amministratore, mai pubblicata. */
+  notes: string | null;
+  /** Richiesta di un video su misura da far realizzare ad AGI Post. */
+  video_request: string | null;
+  /** Social su cui il promoter vorrebbe la campagna (nomi di SocialChannel.platform). */
+  target_platforms: string[];
+  media_file_id: string | null;
+  media_url: string | null;
+  media_mime_type: string | null;
+  /** Data suggerita dal promoter: un'indicazione, non una programmazione. */
+  suggested_scheduled_at: string | null;
+  status: CampaignProposalStatus;
+  /** Motivo del rifiuto, mostrato al promoter così com'è. */
+  review_notes: string | null;
+  reviewed_at: string | null;
+  submitted_at: string | null;
+  /** La campagna nata da questa proposta, una volta approvata. */
+  campaign_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CampaignProposalCreatePayload {
+  title: string;
+  default_text: string;
+  notes?: string | null;
+  video_request?: string | null;
+  target_platforms?: string[];
+  media_file_id?: string | null;
+  suggested_scheduled_at?: string | null;
+  /** false salva una bozza modificabile, true la consegna subito. */
+  submit?: boolean;
+}
+
+export interface CampaignProposalUpdatePayload {
+  title?: string;
+  default_text?: string;
+  notes?: string | null;
+  video_request?: string | null;
+  target_platforms?: string[];
+  media_file_id?: string | null;
+  suggested_scheduled_at?: string | null;
 }

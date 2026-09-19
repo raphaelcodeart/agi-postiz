@@ -4,9 +4,11 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowLeftIcon, ArrowRightIcon, Loader2Icon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, ClapperboardIcon, Loader2Icon } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Form } from "@/components/ui/form";
@@ -28,6 +30,8 @@ import {
 } from "@/hooks/use-campaigns";
 import { ApiError } from "@/lib/api/errors";
 import { BLOG_WRITER_PREFILL_KEY, type BlogWriterCampaignPrefill } from "@/lib/blog-writer-prefill";
+import { PROPOSAL_PREFILL_PARAM } from "@/lib/campaign-proposal-prefill";
+import { useCampaignProposal } from "@/hooks/use-campaign-proposals";
 import { WizardStepper } from "./_components/wizard-stepper";
 import { StepInfo } from "./_components/step-info";
 import { StepText } from "./_components/step-text";
@@ -41,11 +45,17 @@ function NewCampaignForm() {
   const searchParams = useSearchParams();
   const duplicateId = searchParams.get("duplicate");
   const prefillArticle = searchParams.get("prefillArticle") === "1";
+  // Approvazione della proposta di un promoter: il wizard è la schermata di
+  // approvazione, non ce n'è una seconda (vedi lib/campaign-proposal-prefill.ts).
+  const proposalId = searchParams.get(PROPOSAL_PREFILL_PARAM);
   const [step, setStep] = useState(1);
   const createCampaign = useCreateCampaign();
   const duplicateSource = useCampaignDetail(duplicateId ?? undefined);
+  const proposalSource = useCampaignProposal(proposalId ?? undefined);
   const hasPrefilled = useRef(false);
   const hasPrefilledArticle = useRef(false);
+  const hasPrefilledProposal = useRef(false);
+  const queryClient = useQueryClient();
 
   const form = useForm<CampaignWizardValues>({
     resolver: zodResolver(campaignWizardSchema),
@@ -121,6 +131,47 @@ function NewCampaignForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [duplicateSource.data]);
 
+  // Terzo prefill, stesso idioma dei due qui sopra: il contenuto proposto da un
+  // promoter. Arriva dall'API e non da sessionStorage perché la proposta è una
+  // riga che esiste sul server e va riletta nel momento in cui la si approva.
+  // `participation_mode` parte su "opt_out": una campagna nata dall'idea di un
+  // promoter è per definizione una in cui gli altri vogliono poter decidere se
+  // starci - resta comunque modificabile nello step Destinatari.
+  useEffect(() => {
+    if (!proposalSource.data || hasPrefilledProposal.current) return;
+    hasPrefilledProposal.current = true;
+    const proposal = proposalSource.data;
+
+    if (proposal.status !== "submitted") {
+      // Già approvata da un'altra sessione, o ritirata dal promoter nel
+      // frattempo. Il wizard resta aperto e utilizzabile, ma senza legame con
+      // la proposta: crearne una campagna adesso verrebbe comunque rifiutato
+      // dal backend, ed è meglio dirlo qui che allo step finale.
+      toast.error("Questa proposta non è più in attesa: la campagna non verrà collegata.");
+      return;
+    }
+
+    form.reset({
+      ...form.getValues(),
+      title: proposal.title,
+      default_text: proposal.default_text,
+      media_file_id: proposal.media_file_id,
+      participation_mode: "opt_out",
+      // I social indicati dal promoter entrano come filtro per piattaforma
+      // (targeting_mode resta "tutti i canali attivi"): è lo stesso campo dello
+      // step Destinatari, quindi l'amministratore li vede e li può cambiare.
+      platform_names: proposal.target_platforms.length ? proposal.target_platforms : form.getValues().platform_names,
+      publishing_mode: proposal.suggested_scheduled_at ? "scheduled" : "immediate",
+      // La data del promoter è un suggerimento: entra precompilata, e resta
+      // modificabile come qualunque altra scelta di pubblicazione.
+      scheduled_at: proposal.suggested_scheduled_at
+        ? proposal.suggested_scheduled_at.slice(0, 16)
+        : null,
+    });
+    toast.info(`Proposta di ${proposal.user_name ?? "un promoter"} caricata: scegli destinatari e date.`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proposalSource.data]);
+
   // Same idiom as the ?duplicate= prefill above, but reading a blob stashed by
   // Blog Writer's "Usa per campagna social" (see lib/blog-writer-prefill.ts) -
   // sessionStorage instead of a fetched campaign since there's no existing
@@ -180,7 +231,22 @@ function NewCampaignForm() {
   async function handleSubmit(values: CampaignWizardValues) {
     try {
       creepTo(8, 45, "Creazione campagna...");
-      const campaign = await createCampaign.mutateAsync(toCampaignCreatePayload(values));
+      // proposal_id solo se la proposta è ancora in attesa: è la stessa
+      // condizione che il backend rifiuta con un 409, e mandarlo comunque
+      // farebbe fallire la creazione invece di crearne semplicemente una
+      // campagna non collegata.
+      const linkedProposalId =
+        proposalSource.data?.status === "submitted" ? proposalSource.data.id : null;
+      const campaign = await createCampaign.mutateAsync({
+        ...toCampaignCreatePayload(values),
+        proposal_id: linkedProposalId,
+      });
+      if (linkedProposalId) {
+        // La proposta è appena passata ad "approvata": senza questo, l'elenco
+        // Proposte e il pallino in sidebar continuerebbero a segnalarla come
+        // da esaminare fino al refresh successivo.
+        queryClient.invalidateQueries({ queryKey: ["campaignProposals"] });
+      }
 
       // An opt-out campaign is announced, never launched from here. Launching is
       // what sends every post to the provider; the whole point of this mode is
@@ -237,17 +303,40 @@ function NewCampaignForm() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title={duplicateId ? "Duplica campagna" : prefillArticle ? "Nuova campagna da articolo" : "Nuova campagna"}
+        title={
+          proposalId
+            ? "Approva proposta"
+            : duplicateId
+              ? "Duplica campagna"
+              : prefillArticle
+                ? "Nuova campagna da articolo"
+                : "Nuova campagna"
+        }
         description={
-          duplicateId
-            ? "Testo, media e destinatari precompilati dalla campagna originale: correggi ciò che serve e scegli come pubblicare."
-            : prefillArticle
-              ? "Testo precompilato dall'articolo Blog Writer: rivedilo, scegli destinatari e pubblicazione."
-              : "Crea una campagna di pubblicazione multi-piattaforma"
+          proposalId
+            ? "Testo e video proposti da un promoter. La proposta risulta approvata quando crei la campagna: destinatari, date e lancio restano tuoi."
+            : duplicateId
+              ? "Testo, media e destinatari precompilati dalla campagna originale: correggi ciò che serve e scegli come pubblicare."
+              : prefillArticle
+                ? "Testo precompilato dall'articolo Blog Writer: rivedilo, scegli destinatari e pubblicazione."
+                : "Crea una campagna di pubblicazione multi-piattaforma"
         }
       />
 
       <WizardStepper currentStep={step} />
+
+      {/* Resta visibile in ogni step: il video richiesto va prodotto e
+          caricato nello step Media prima di lanciare la campagna. */}
+      {proposalSource.data?.status === "submitted" && proposalSource.data.video_request && (
+        <Alert className="border-primary/30 bg-primary/5">
+          <ClapperboardIcon className="size-4" />
+          <AlertTitle>Il promoter chiede un video su misura</AlertTitle>
+          <AlertDescription>
+            <p className="whitespace-pre-wrap">{proposalSource.data.video_request}</p>
+            <p className="mt-1 text-xs">Caricalo nello step Media una volta realizzato.</p>
+          </AlertDescription>
+        </Alert>
+      )}
 
       <Card>
         <CardContent className="p-6">

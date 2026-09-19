@@ -7,6 +7,9 @@ from app.api.v1 import omnichannel, omnichannel_webhooks
 from app.api.v1 import statistics
 from app.api.v1 import public_stats
 from app.api.v1 import portal
+from app.api.v1 import portal_statistics
+from app.api.v1 import portal_proposals
+from app.api.v1 import campaign_proposals
 from app.api.v1 import bundle_social_webhooks
 
 app = FastAPI(
@@ -24,6 +27,7 @@ origins = [
     "http://app.example.com",
     "https://app.46-225-185-149.sslip.io",
     "https://static.149.185.225.46.clients.your-server.de",
+    "https://agipostapp.mamify.ai",
 ]
 
 app.add_middleware(
@@ -48,10 +52,24 @@ app.include_router(blog_writer_articles.router, prefix=f"{settings.API_V1_STR}/b
 app.include_router(omnichannel.router, prefix=f"{settings.API_V1_STR}/omnichannel-responder", tags=["omnichannel-responder"])
 app.include_router(omnichannel_webhooks.router, prefix=f"{settings.API_V1_STR}/omnichannel-responder", tags=["omnichannel-responder"])
 app.include_router(statistics.router, prefix=f"{settings.API_V1_STR}/statistics", tags=["statistics"])
+# Proposte di campagna scritte dai promoter: qui il lato amministratore
+# (elenco/rifiuto). L'approvazione e' la creazione della campagna stessa, vedi
+# app/api/v1/campaign_proposals.py.
+app.include_router(
+    campaign_proposals.router, prefix=f"{settings.API_V1_STR}/campaign-proposals", tags=["campaign-proposals"]
+)
 app.include_router(public_stats.router, prefix=f"{settings.API_V1_STR}/public/stats", tags=["public"])
 # Portale utenti finali: superficie separata da quella admin, ogni query e'
 # filtrata sull'utente autenticato (vedi app/api/v1/portal.py).
 app.include_router(portal.router, prefix=f"{settings.API_V1_STR}/portal", tags=["portal"])
+# Stesso prefisso e stessa dipendenza di autenticazione: e' un file separato solo
+# per dimensione (vedi app/api/v1/portal_statistics.py).
+app.include_router(
+    portal_statistics.router, prefix=f"{settings.API_V1_STR}/portal", tags=["portal"]
+)
+app.include_router(
+    portal_proposals.router, prefix=f"{settings.API_V1_STR}/portal", tags=["portal"]
+)
 # Webhook in ingresso dal provider: endpoint pubblico, autenticato dalla firma
 # HMAC (vedi app/api/v1/bundle_social_webhooks.py).
 app.include_router(

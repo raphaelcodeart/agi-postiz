@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, EmailStr, Field
+from typing import Optional, List, Dict, Any, Literal
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 # ==============================================================================
 # Authentication Schemas
@@ -275,6 +275,13 @@ class CampaignCreate(BaseModel):
     # Only meaningful with participation_mode="opt_out".
     opt_out_deadline_at: Optional[datetime] = None
     auto_launch_at_deadline: bool = False
+    # Set when an administrator is approving a promoter's campaign proposal
+    # (see models/campaign_proposal.py): the proposal is marked approved and
+    # linked to this campaign in the same transaction that creates it. Approving
+    # IS creating the campaign - there is no separate "approve" step that could
+    # leave a proposal approved with no campaign behind it, or a campaign whose
+    # proposal is still waiting.
+    proposal_id: Optional[uuid.UUID] = None
 
 class CampaignResponse(BaseModel):
     id: uuid.UUID
@@ -1226,3 +1233,76 @@ class PublicStatsResponse(BaseModel):
     totals: StatMetricTotals
     platforms: List[PublicPlatformStats]
     last_synced_at: Optional[datetime]
+
+
+# ==============================================================================
+# Campaign proposals - content a promoter suggests to the administrator.
+# See app/models/campaign_proposal.py for why this is its own table and not a
+# status on Campaign.
+# ==============================================================================
+ProposalPlatform = Literal["instagram", "facebook", "tiktok", "youtube", "linkedin", "twitter", "threads"]
+
+
+def _dedupe_platforms(value: Optional[List[str]]) -> Optional[List[str]]:
+    """Stesso social scelto due volte = una volta sola, nell'ordine dato."""
+    return list(dict.fromkeys(value)) if value is not None else None
+
+
+class CampaignProposalCreate(BaseModel):
+    title: str = Field(..., max_length=255, min_length=3)
+    default_text: str = Field(..., max_length=5000, min_length=1)
+    notes: Optional[str] = Field(None, max_length=2000)
+    # Richiesta di un video su misura da far realizzare ad AGI Post.
+    video_request: Optional[str] = Field(None, max_length=2000)
+    target_platforms: List[ProposalPlatform] = Field(default_factory=list)
+    media_file_id: Optional[uuid.UUID] = None
+    suggested_scheduled_at: Optional[datetime] = None
+    # False salva una bozza che resta modificabile e che l'amministratore non
+    # vede; True la consegna subito. Due bottoni nel portale, un campo qui.
+    submit: bool = False
+
+    _dedupe = field_validator("target_platforms")(_dedupe_platforms)
+
+
+class CampaignProposalUpdate(BaseModel):
+    """Solo finche' la proposta e' modificabile (bozza o rifiutata): una volta
+    consegnata e' cio' che l'amministratore sta guardando, e cambiarla sotto i
+    suoi occhi significherebbe fargli approvare un testo diverso da quello letto."""
+    title: Optional[str] = Field(None, max_length=255, min_length=3)
+    default_text: Optional[str] = Field(None, max_length=5000, min_length=1)
+    notes: Optional[str] = Field(None, max_length=2000)
+    video_request: Optional[str] = Field(None, max_length=2000)
+    target_platforms: Optional[List[ProposalPlatform]] = None
+    media_file_id: Optional[uuid.UUID] = None
+    suggested_scheduled_at: Optional[datetime] = None
+
+    _dedupe = field_validator("target_platforms")(_dedupe_platforms)
+
+
+class CampaignProposalReviewRequest(BaseModel):
+    """Il rifiuto porta sempre un motivo: un "no" senza spiegazione non dice al
+    promoter cosa cambiare, e la proposta torna modificabile apposta perche'
+    possa correggerla e ripresentarla."""
+    review_notes: str = Field(..., max_length=2000, min_length=1)
+
+
+class CampaignProposalResponse(BaseModel):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    user_name: Optional[str] = None
+    title: str
+    default_text: str
+    notes: Optional[str]
+    video_request: Optional[str] = None
+    target_platforms: List[str] = []
+    media_file_id: Optional[uuid.UUID]
+    media_url: Optional[str] = None
+    media_mime_type: Optional[str] = None
+    suggested_scheduled_at: Optional[datetime]
+    status: str
+    review_notes: Optional[str]
+    reviewed_at: Optional[datetime]
+    submitted_at: Optional[datetime]
+    campaign_id: Optional[uuid.UUID]
+    created_at: datetime
+    updated_at: datetime

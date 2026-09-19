@@ -26,6 +26,7 @@ Le tabelle del modulo Statistiche (`stat_*`, 3 tabelle) sono documentate separat
 8. [Audit log](#8-audit-log)
 9. [Impostazioni AI](#9-impostazioni-ai)
 10. [Modulo Statistiche](#10-modulo-statistiche)
+11. [Proposte di campagna](#11-proposte-di-campagna)
 
 ---
 
@@ -173,6 +174,7 @@ File caricati (foto/video) da allegare alle campagne, serviti via Nginx da un vo
 | `duration_seconds`, `width`, `height`, `video_codec`, `audio_codec` | | metriche estratte via ffprobe, solo per i video |
 | `processing_status` | string | `uploaded`, `inspecting`, `processing`, `ready`, `failed` |
 | `metadata_json` (colonna `metadata`) | JSONB | include `thumbnail_path`/`thumbnail_url` generati via ffmpeg — usati solo per l'anteprima interna, **non** inviati a Buffer (l'API reale rifiuta thumbnail personalizzate per i video, vedi commento in `prod_client.py`) |
+| `uploaded_by_user_id` | UUID nullable, FK `users.id` (SET NULL) | valorizzato solo quando il file arriva dal portale di un promoter (allegato a una proposta di campagna, §11). `NULL` = caricato da un amministratore, com'è per ogni riga precedente al 2026-09-19. La libreria media è condivisa fra le due parti, quindi senza questa colonna un video di un promoter sarebbe indistinguibile dal materiale dell'amministratore — ed è anche il controllo su cui poggia `portal_proposals._validate_media`, che impedisce a un promoter di allegare alla propria proposta un id altrui e vedersene restituire l'URL |
 
 ---
 
@@ -310,3 +312,31 @@ Quando la riga non esiste valgono i default definiti in `models/platform_setting
 ## 10. Modulo Statistiche
 
 Schema completo, motore di sync e endpoint documentati separatamente in **[STATISTICS.md](./STATISTICS.md)** — modulo isolato, 3 tabelle (`stat_sync_runs`, `stat_post_metrics`, `stat_metric_history`), collegato al resto della piattaforma solo tramite foreign key in sola lettura verso `publications`/`campaigns`/`users`/`social_channels`/`buffer_connections`/`administrators`. Persiste (invece di ricalcolare ogni volta) le metriche Buffer per post, navigabili in dashboard per utente → canale → campagna.
+
+---
+
+## 11. Proposte di campagna
+
+Contenuti che un promoter suggerisce dal suo portale (testo, video, nota e una data indicativa). L'amministratore le esamina e, accettandone una, crea da quel contenuto una campagna vera. Migration `d8b3f6a1c927`; modello `app/models/campaign_proposal.py`.
+
+### `campaign_proposals`
+
+**Tabella separata da `campaigns`, non uno stato in più su quella.** La differenza non è organizzativa, è di sicurezza: `campaigns` è la tabella che leggono il resolver dei destinatari, il task di lancio e il poller di beat. Una riga lì dentro che "non va mai lanciata" costringerebbe ognuno di quei percorsi a imparare a saltarla, e un solo filtro dimenticato pubblicherebbe su tutti i canali la bozza non ancora esaminata di un promoter. Una tabella diversa non è lanciabile per costruzione: non esiste codice che parta da qui e arrivi a una pubblicazione.
+
+| Colonna | Tipo | Note |
+|---|---|---|
+| `user_id` | UUID, FK `users.id` (CASCADE), indicizzata | chi l'ha scritta |
+| `title` | string(255) | serve a riconoscerla, non viene mai pubblicato |
+| `default_text` | string(5000) | il testo del post proposto. **Un solo testo**, non le dieci varianti per piattaforma di `campaigns`: il promoter propone un contenuto, le rifiniture per Instagram/YouTube/X le fa l'amministratore nel wizard, dove quei campi già esistono |
+| `notes` | string(2000) nullable | nota per l'amministratore (perché funziona, cosa c'è nel video). Non finisce mai nel testo pubblicato |
+| `media_file_id` | UUID nullable, FK `media_files.id` (SET NULL) | il video/immagine caricato dal promoter (vedi `media_files.uploaded_by_user_id`, §6) |
+| `suggested_scheduled_at` | timestamp nullable | data **indicativa**, tenuta separata da `campaigns.scheduled_at` di proposito: chi decide quando si pubblica resta l'amministratore |
+| `status` | string(30) | `draft` → `submitted` → `approved` \| `rejected`. `draft` e `rejected` sono gli unici stati modificabili/cancellabili dal promoter |
+| `review_notes` | string(2000) nullable | motivo del rifiuto, mostrato al promoter così com'è. Azzerato quando ripresenta la proposta: lasciarlo accanto a un testo nel frattempo cambiato farebbe leggere all'amministratore una critica che non riguarda più ciò che ha davanti |
+| `reviewed_by` | UUID nullable, FK `administrators.id` (SET NULL) | |
+| `reviewed_at`, `submitted_at` | timestamp nullable | |
+| `campaign_id` | UUID nullable, FK `campaigns.id` (**SET NULL**) | la campagna nata dall'approvazione. `SET NULL` e non `CASCADE`: se la campagna viene cancellata la proposta resta — è il documento che dice che quel promoter aveva contribuito |
+
+Il collegamento fra le due tabelle è **in una direzione sola**, da qui verso `campaigns`: nessun percorso di pubblicazione può risalire a una proposta, né ha motivo di farlo.
+
+**L'approvazione è la creazione della campagna.** Non esiste un endpoint "approva": `POST /campaigns/` accetta un `proposal_id` e, nella **stessa transazione** che crea la campagna, marca la proposta `approved` e la collega. È una scelta, non una mancanza — un endpoint separato lascerebbe aperta la finestra in cui una proposta risulta approvata senza campagna dietro, o una campagna esiste mentre la proposta risulta ancora in attesa. La stessa proposta non può quindi diventare due campagne: la seconda chiamata trova lo stato già `approved` e risponde `409`.

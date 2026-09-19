@@ -22,6 +22,7 @@ Il modulo **Statistiche** (dashboard persistita delle metriche Buffer per promot
 4-ter. [Portale utenti finali](#4-ter-portale-utenti-finali)
 5. [Campagne: targeting e testo](#5-campagne-targeting-e-testo)
 5-bis. [Palinsesto: campagne ad adesione (opt-out)](#5-bis-palinsesto-campagne-ad-adesione-opt-out)
+5-ter. [Proposte di campagna dai promoter](#5-ter-proposte-di-campagna-dai-promoter)
 6. [Ciclo di vita di una pubblicazione](#6-ciclo-di-vita-di-una-pubblicazione)
 7. [Rate limiting verso Buffer](#7-rate-limiting-verso-buffer)
 8. [Task in background (Celery)](#8-task-in-background-celery)
@@ -263,6 +264,40 @@ emessi prima di questa modifica non hanno il claim e restano validi come admin.
 I due cookie sono distinti, quindi le due sessioni convivono nello stesso
 browser.
 
+**Veste grafica: quella della landing, non quella dell'amministrazione**
+(2026-09-14). Tutta l'area `/portal` - accesso, registrazione e dashboard -
+segue il sistema grafico della pagina pubblica di presentazione
+(agipost.mamify.ai): fondo avorio `#FBFAF8`, accento viola `#6C5CE0`, carattere
+Inter, bottoni a pillola, schede a raggio 24px, il marchio a nodi collegati col
+suo gradiente a quattro fermate. I valori non sono riprodotti a occhio: sono
+copiati dai token reali di `assets/css/style.css` della landing.
+
+Il perche' e' di fiducia, non di gusto. Un promoter arriva quasi sempre da quella
+pagina: un salto di stile a meta' strada fa sembrare l'applicazione un altro
+prodotto, e su una schermata che chiede una password quel dubbio costa
+iscrizioni. La dashboard amministrativa resta invece sul tema dell'app (chiaro o
+scuro secondo il sistema operativo): la vediamo solo noi, e non ha nessuno da
+convincere.
+
+Come e' fatto, in pratica: un unico blocco `.portal-skin` in
+`app/globals.css` ridefinisce i token shadcn (`--background`, `--card`,
+`--primary`, `--border`, `--radius`, `--brand-*`) con i valori della landing. Le
+pagine del portale erano gia' scritte con classi semantiche (`bg-card`,
+`text-muted-foreground`, `text-primary`), quindi cambiano aspetto senza essere
+toccate una per una - le uniche modifiche ai file di pagina sono l'aggiunta della
+classe sul layout e l'intestazione col marchio. La palette e' fissata sul chiaro
+anche sotto `.dark`: la landing un tema scuro non ce l'ha, e seguire qui le
+preferenze di sistema mostrerebbe due identita' diverse della stessa pagina.
+Marchio e carattere stanno in `app/portal/_shared/brand.tsx`, condivisi fra i
+gruppi `(public)` e `(app)` perche' due copie finirebbero per divergere.
+
+Due eccezioni deliberate al "tutto come la landing": il gradiente del marchio
+resta sul logo e sulle barre di avanzamento ma **non** sui bottoni (su 150px le
+quattro fermate si schiacciano in una banda arcobaleno che legge come un errore -
+le azioni piene sono viola pieno, come sulla landing), e i bottoni icona non
+diventano pillole (su un quadrato una pillola e' un cerchio, e si confonde con un
+avatar).
+
 **Superficie separata invece di multi-tenancy retrofittata.** Gli endpoint
 esistenti assumono che il chiamante veda tutto (`get_current_admin`); adattarli
 avrebbe richiesto di verificare e ritestare ognuno, dove un filtro dimenticato e'
@@ -279,6 +314,20 @@ collegare i canali nel frattempo, e la dashboard glielo spiega.
 Il pulsante "Collega un canale" richiede il client di produzione del fornitore:
 finche' non e' implementato risponde `501` con un messaggio esplicito, non un
 errore generico.
+
+**Proporre una campagna** (2026-09-19). Dal portale un promoter può scrivere una proposta di campagna — testo, video, una nota per l'amministratore e una data indicativa — e mandargliela. Non pubblica niente e non può pubblicare niente: se la proposta viene accettata è l'amministratore a creare la campagna, con i suoi destinatari e le sue date. Sezione `/portal/proposals`, dettaglio in [§5-ter](#5-ter-proposte-di-campagna-dai-promoter).
+
+**Storico campagne ricercabile** (2026-09-19). `/portal/campaigns` non è più una tabella a sette colonne da scorrere di lato su un telefono: è un elenco di schede con ricerca per titolo, quattro filtri rapidi (tutte / in programma / pubblicate / non partecipate, ognuno col proprio conteggio) e ordinamento per data. Filtra nel browser e non via API di proposito — `GET /portal/campaigns` restituisce già tutte le campagne di quell'utente in una chiamata, quindi ogni filtro sarebbe un giro di rete per riordinare dati già presenti, e scrivere nella casella di ricerca resta istantaneo anche con la rete mobile.
+
+**Sezione Statistiche del promoter** (2026-09-19). Oltre alle cifre di sintesi in
+homepage, il portale ha una sezione `/portal/statistics` con lo stesso dettaglio
+della sezione Statistiche dell'amministratore, ristretto ai propri canali e ai
+propri post: totali per metrica, grafico di andamento mensile/annuale, elenco dei
+canali con i mini-totali per riga, e dentro ogni canale i singoli post con le
+loro metriche e il link al post sul social. C'e' anche l'export Excel (ai due
+livelli) e un bottone "Aggiorna statistiche" che sincronizza **solo** i propri
+post. Dettaglio completo, e il perche' di cosa il promoter puo' e non puo' fare
+rispetto all'amministratore, in [STATISTICS.md ss11](./STATISTICS.md#11-le-statistiche-nel-portale-del-promoter).
 
 ---
 
@@ -398,6 +447,44 @@ Un canale escluso da un amministratore (`status='removed'`) **non** può essere 
 | `POST` | `/portal/lineup/{id}/join` | utente | aggiunge i propri canali |
 
 Il codice sta in `services/campaign_participation.py`; i test in `tests/services/test_campaign_participation.py`.
+
+---
+
+## 5-ter. Proposte di campagna dai promoter
+
+Aggiunta il 2026-09-19. Un promoter può **suggerire** un contenuto; la campagna vera la crea e la lancia sempre e solo l'amministratore. È un modo per far arrivare i video e le idee di chi pubblica davvero senza spostare di un millimetro chi ha il controllo di cosa esce.
+
+### Il giro completo
+
+1. Il promoter, dal suo portale (`/portal/proposals`), scrive titolo, testo del post, carica un video o un'immagine, aggiunge una nota per l'amministratore e — se vuole — una data indicativa. Può **salvarla come bozza** (resta in mano sua, l'amministratore non la vede nemmeno) o **inviarla**.
+2. Inviata, la proposta si congela: è esattamente il testo che l'amministratore sta leggendo, e cambiarlo sotto i suoi occhi significherebbe fargliene approvare un altro.
+3. L'amministratore la trova in **Proposte** (`/campaign-proposals`, voce di menu sotto "Campagne", col pallino rosso quando ce n'è da esaminare).
+4. **Rifiuto**: sempre con un motivo, che il promoter legge così com'è. La proposta gli torna modificabile — un "no" che non lascia correggere e ripresentare è un vicolo cieco, non una risposta.
+5. **Accettazione**: si apre il **wizard di creazione campagna già compilato** col contenuto proposto. Da lì in poi non c'è niente di nuovo da imparare: destinatari, testi per singola piattaforma, date, palinsesto e lancio sono i passaggi di sempre ([§5](#5-campagne-targeting-e-testo), [§5-bis](#5-bis-palinsesto-campagne-ad-adesione-opt-out)). La campagna parte con `participation_mode = "opt_out"` preselezionato — una campagna nata dall'idea di un promoter è per definizione una in cui gli altri vogliono poter decidere se starci — ma resta modificabile come ogni altra scelta.
+6. Creata la campagna, ogni promoter la vede nel proprio palinsesto e può togliersene, esattamente come per qualunque campagna ad adesione.
+
+### Le due regole che tengono in piedi la cosa
+
+**La proposta non è una campagna.** Vive in una tabella sua (`campaign_proposals`, [DATABASE.md §11](./DATABASE.md#11-proposte-di-campagna)) che nessun percorso di pubblicazione legge. Non è un dettaglio implementativo: se fosse uno stato in più su `campaigns`, il resolver dei destinatari, il task di lancio e il poller di beat dovrebbero tutti imparare a saltarla, e un solo filtro dimenticato manderebbe in onda su ogni canale la bozza non ancora esaminata di qualcuno. Così com'è, non esiste codice che parta da una proposta e arrivi a una pubblicazione.
+
+**Approvare è creare la campagna**, in una sola transazione (`POST /campaigns/` con `proposal_id`). Non c'è un endpoint "approva" separato, e non è una mancanza: due operazioni distinte lascerebbero aperta la finestra in cui una proposta risulta approvata senza nessuna campagna dietro, o in cui la campagna esiste mentre la proposta risulta ancora in attesa. La stessa proposta non può diventare due campagne — la seconda volta risponde `409`.
+
+### Endpoint
+
+| Metodo | Endpoint | Chi | Cosa |
+|---|---|---|---|
+| `GET` | `/portal/proposals` | promoter | le proprie proposte |
+| `POST` | `/portal/proposals` | promoter | crea (bozza o già inviata, campo `submit`) |
+| `PATCH` | `/portal/proposals/{id}` | promoter | modifica — solo bozze e proposte rifiutate |
+| `POST` | `/portal/proposals/{id}/submit` | promoter | invia all'amministratore |
+| `DELETE` | `/portal/proposals/{id}` | promoter | elimina — solo bozze e rifiutate |
+| `POST` | `/portal/proposals/media` | promoter | carica il video/immagine (stesso `MediaService` dell'upload admin, marcato con `uploaded_by_user_id`) |
+| `GET` | `/campaign-proposals/` | admin | elenco (mai le bozze altrui: non gliele ha mandate nessuno) |
+| `GET` | `/campaign-proposals/summary` | admin | conteggi per il pallino in sidebar |
+| `POST` | `/campaign-proposals/{id}/reject` | admin | rifiuta con motivo |
+| `POST` | `/campaigns/` con `proposal_id` | admin | **approva creando la campagna** |
+
+Il token del portale non è accettato dall'audience admin ([§4-ter](#4-ter-portale-utenti-finali)), quindi nessun promoter può raggiungere né `/campaigns/` né `/campaign-proposals/`: un test lo verifica esplicitamente.
 
 ---
 

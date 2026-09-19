@@ -21,6 +21,7 @@ import {
   RadioIcon,
   SparklesIcon,
   BookOpenIcon,
+  LightbulbIcon,
 } from "lucide-react";
 
 export interface NavItem {
@@ -58,6 +59,11 @@ export const MAIN_NAV_ITEMS: NavItem[] = [
 // setup above.
 export const BUFFER_NAV_ITEMS: NavItem[] = [
   { href: "/campaigns", label: "Campagne", icon: MegaphoneIcon },
+  // Contenuti proposti dai promoter dal loro portale, in attesa che
+  // l'amministratore li trasformi in campagne (o li rifiuti). Subito sotto
+  // "Campagne" perché è da dove nascono, e porta il pallino rosso quando ce
+  // n'è qualcuna da esaminare - vedi app-sidebar.tsx.
+  { href: "/campaign-proposals", label: "Proposte", icon: LightbulbIcon },
   { href: "/publications", label: "Pubblicazioni", icon: SendIcon },
   { href: "/statistics", label: "Statistiche", icon: BarChart3Icon },
   { href: "/errors", label: "Centro errori", icon: AlertOctagonIcon },

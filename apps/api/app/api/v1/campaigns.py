@@ -8,6 +8,7 @@ from app.db.session import get_db
 from app.api.v1.auth import get_current_admin
 from app.models.administrator import Administrator
 from app.models.campaign import Campaign, CampaignParticipant, CampaignTarget
+from app.models.campaign_proposal import CampaignProposal
 from app.models.publication import Publication
 from app.models.media import MediaFile
 from app.models.audit import AuditLog
@@ -16,6 +17,7 @@ from app.integrations.providers import get_provider_context
 from app.integrations.buffer.exceptions import BufferApiError
 from app.services.campaign_resolver import CampaignResolver
 from app.services import campaign_participation
+from app.services import campaign_proposal_service
 from app.schemas.schemas import (
     CampaignAnnounceRequest,
     CampaignCreate,
@@ -64,13 +66,40 @@ def create_campaign(
     db: Session = Depends(get_db),
     admin: Administrator = Depends(get_current_admin)
 ):
-    """Create a new campaign in draft status."""
+    """
+    Create a new campaign in draft status.
+
+    With `proposal_id` set, this is also how a promoter's campaign proposal gets
+    approved: the proposal is marked approved and linked to the campaign in the
+    SAME transaction that creates it (see app/api/v1/campaign_proposals.py for
+    why there is no separate approve endpoint). Either both happen or neither
+    does - there is no window where a proposal is approved with no campaign
+    behind it.
+    """
     # Ensure media exists if specified
     if payload.media_file_id:
         media = db.query(MediaFile).filter(MediaFile.id == payload.media_file_id).first()
         if not media:
             raise HTTPException(status_code=404, detail="Media file not found")
-            
+
+    proposal = None
+    if payload.proposal_id:
+        proposal = db.query(CampaignProposal).filter(CampaignProposal.id == payload.proposal_id).first()
+        if not proposal:
+            raise HTTPException(status_code=404, detail="Proposta non trovata")
+        if proposal.status != CampaignProposal.STATUS_SUBMITTED:
+            # Già approvata (una campagna esiste di sicuro), rifiutata o
+            # ritirata in bozza dal promoter: in nessuno dei tre casi è qualcosa
+            # che l'amministratore sta approvando adesso.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Questa proposta è già diventata una campagna."
+                    if proposal.status == CampaignProposal.STATUS_APPROVED
+                    else "Questa proposta non è più in attesa di approvazione."
+                ),
+            )
+
     campaign = Campaign(
         title=payload.title,
         default_text=payload.default_text,
@@ -99,6 +128,11 @@ def create_campaign(
         metadata_json=payload.targeting_params, # Save targeting parameters here
     )
     db.add(campaign)
+    if proposal is not None:
+        # flush e non commit: serve l'id della campagna per collegarla alla
+        # proposta, ma le due scritture devono restare un'unica transazione.
+        db.flush()
+        campaign_proposal_service.mark_approved(proposal, admin.id, campaign.id)
     db.commit()
     db.refresh(campaign)
     return campaign
