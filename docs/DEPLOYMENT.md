@@ -397,6 +397,35 @@ aggiornate `NEXT_PUBLIC_API_URL` e `PUBLIC_MEDIA_BASE_URL` nel `.env` e la lista
 
 Il cron di rinnovo descritto sopra copre **entrambi** i certificati (sslip.io e hostname temporaneo): `certbot renew` rinnova in un colpo solo tutti i certificati emessi su questo host, non serve una riga per ciascuno.
 
+### Dominio vero: `agipostapp.mamify.ai`
+
+Il dominio pubblico della piattaforma. Il DNS di `mamify.ai` sta su Hostinger: serve un record
+**A** `agipostapp` → `46.225.185.149` (l'IP di questo server; la root `mamify.ai` punta altrove,
+`162.55.187.18`, e non va toccata).
+
+A record creato e propagato, il resto lo fa uno script solo:
+
+```bash
+cd /opt/agi-postiz
+./scripts/add-domain.sh agipostapp.mamify.ai tuaemail@esempio.com
+```
+
+Lo script verifica che il DNS punti davvero qui (una challenge ACME fallita consuma i limiti di
+Let's Encrypt), richiede il certificato e solo **dopo** aggiunge il vhost HTTPS a `nginx.conf` —
+l'ordine inverso farebbe fallire ogni reload di Nginx, perché `ssl_certificate` punterebbe a un
+file inesistente.
+
+Come l'hostname Hetzner qui sopra, è un alias del vhost `app.*`: hostname singolo, niente
+sottodomini `api.`/`media.`, quindi la dashboard raggiunge il backend attraverso il proprio proxy
+BFF same-origin. `PUBLIC_MEDIA_BASE_URL` e `NEXT_PUBLIC_API_URL` restano sugli hostname sslip.io.
+
+Essendo il dominio pubblico principale, `PORTAL_PUBLIC_BASE_URL` nel `.env` punta qui: è l'URL su
+cui bundle.social rimanda l'utente al termine del collegamento di un account social
+(`/portal/connect-done`). Cambiarlo richiede un riavvio di `api`, `worker` e `beat`. L'origine è
+anche nella allowlist CORS in `apps/api/app/main.py`, che invece richiede una rebuild dell'immagine.
+
+Il cron di rinnovo copre anche questo certificato, senza modifiche.
+
 ---
 
 ## 10. Backup e ripristino del database (il "dump")
