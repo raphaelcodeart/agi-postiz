@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from sqlalchemy import func, insert, or_, select
+from sqlalchemy import case, func, insert, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, defer, joinedload
 from app.db.session import get_db
@@ -127,14 +127,21 @@ def list_channel_accounts(db: Session = Depends(get_db), admin: Administrator = 
     # new customer/topic, not one per message), so "how many people wrote to
     # us on this channel" is exactly a count of conversations, grouped by
     # channel_account_id in a single query rather than one COUNT per account.
-    counts = dict(
-        db.query(OmniConversation.channel_account_id, func.count(OmniConversation.id))
+    needs_attention = or_(OmniConversation.status == "WAITING_APPROVAL", OmniConversation.unread_count > 0)
+    rows = (
+        db.query(
+            OmniConversation.channel_account_id,
+            func.count(OmniConversation.id),
+            func.coalesce(func.sum(case((needs_attention, 1), else_=0)), 0),
+            func.coalesce(func.sum(OmniConversation.unread_count), 0),
+        )
         .filter(OmniConversation.owner_id == admin.id)
         .group_by(OmniConversation.channel_account_id)
         .all()
     )
+    counts = {account_id: (total, pending, unread) for account_id, total, pending, unread in rows}
     for account in accounts:
-        account.conversation_count = counts.get(account.id, 0)
+        account.conversation_count, account.pending_count, account.unread_count = counts.get(account.id, (0, 0, 0))
     return accounts
 
 

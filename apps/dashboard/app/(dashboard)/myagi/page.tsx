@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
+  InboxIcon,
   LogOutIcon,
   MessageCircleIcon,
   PlayIcon,
@@ -158,6 +159,16 @@ export default function MyAgiPage() {
                   {session.detail && <p className="mt-1 text-xs text-muted-foreground">{session.detail}</p>}
                 </div>
                 <div className="flex flex-wrap gap-1">
+                  {/* Porta all'Inbox gia' filtrata su questo numero (vedi
+                      omnichannel-responder/page.tsx, parametro ?account=). */}
+                  <Button size="sm" variant="outline" asChild>
+                    <Link href={`/omnichannel-responder?account=${session.channel_account_id}`} title="Apri l'Inbox con le sole conversazioni di questo numero">
+                      <InboxIcon /> Inbox
+                      {session.conversation_count > 0 && (
+                        <span className="rounded-full bg-muted px-1.5 text-[0.65rem] tabular-nums text-muted-foreground">{session.conversation_count}</span>
+                      )}
+                    </Link>
+                  </Button>
                   {canShowQr && (
                     <Button size="sm" onClick={() => setQrAccountId(session.channel_account_id)}>
                       <QrCodeIcon /> Mostra QR

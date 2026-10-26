@@ -6,8 +6,7 @@ import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/shared/search-input";
 import { FilterSelect } from "@/components/shared/filter-bar";
 import { useChannelAccounts } from "@/hooks/use-omnichannel";
-import { cn } from "@/lib/utils";
-import { ChannelIcon } from "./channel-icon";
+import { AccountSwitcher, accountSubtitle } from "./account-switcher";
 import { BroadcastDialog } from "./broadcast-dialog";
 import type { OmniConversationStatus } from "@/types/api";
 
@@ -37,9 +36,11 @@ interface InboxToolbarProps {
  * (conversation list / chat / customer panel) instead of stacked inside the
  * 300px-wide conversation list column - search, status and channel filters
  * need real horizontal room, which the narrow sidebar never had. Owns only
- * the channel-account list (for the filter pills) and the broadcast dialog;
- * all conversation filter *state* is lifted to the parent page so both this
- * toolbar and ConversationList render off the same query.
+ * the channel-account list (for the AccountSwitcher) and the broadcast
+ * dialog; all conversation filter *state* is lifted to the parent page so
+ * both this toolbar and ConversationList render off the same query - and
+ * the page keeps the account filter in the URL (?account=) so myAGI and
+ * Canali can deep-link to "the Inbox of this number only".
  */
 export function InboxToolbar({
   search,
@@ -54,6 +55,7 @@ export function InboxToolbar({
 }: InboxToolbarProps) {
   const [broadcastOpen, setBroadcastOpen] = useState(false);
   const { data: channelAccounts } = useChannelAccounts();
+  const selectedAccount = channelAccounts?.find((a) => a.id === channelAccountFilter);
 
   return (
     <div className="flex flex-col gap-2.5 border-b bg-muted/30 px-4 py-3">
@@ -65,6 +67,8 @@ export function InboxToolbar({
             <span className="text-xs text-muted-foreground">({conversationCount})</span>
           )}
         </div>
+
+        <AccountSwitcher accounts={channelAccounts} value={channelAccountFilter} onChange={onChannelAccountFilterChange} />
 
         <SearchInput
           value={search}
@@ -95,36 +99,11 @@ export function InboxToolbar({
         </Button>
       </div>
 
-      {channelAccounts && channelAccounts.length > 1 && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-muted-foreground">Canale:</span>
-          <button
-            type="button"
-            onClick={() => onChannelAccountFilterChange("")}
-            title="Tutti i canali"
-            className={cn(
-              "rounded-full border px-2 py-1 text-[0.7rem] font-medium transition-colors",
-              channelAccountFilter === "" ? "border-primary bg-primary/10 text-primary" : "border-transparent bg-background text-muted-foreground hover:bg-muted"
-            )}
-          >
-            Tutti
-          </button>
-          {channelAccounts.map((account) => (
-            <button
-              key={account.id}
-              type="button"
-              onClick={() => onChannelAccountFilterChange(channelAccountFilter === account.id ? "" : account.id)}
-              title={account.name}
-              className={cn(
-                "flex items-center gap-1.5 rounded-full border px-2 py-1 text-[0.7rem] transition-colors",
-                channelAccountFilter === account.id ? "border-primary bg-primary/10 text-primary" : "border-transparent bg-background text-muted-foreground hover:bg-muted"
-              )}
-            >
-              <ChannelIcon channel={account.channel} />
-              <span className="max-w-28 truncate">{account.name}</span>
-            </button>
-          ))}
-        </div>
+      {selectedAccount && (
+        <p className="text-xs text-muted-foreground">
+          Stai vedendo solo le conversazioni di <span className="font-medium text-foreground">{selectedAccount.name}</span> ({accountSubtitle(selectedAccount)}).
+          Le risposte partiranno da questo numero. Le altre conversazioni restano nascoste finché non torni a &quot;Tutti i canali&quot;.
+        </p>
       )}
 
       <BroadcastDialog open={broadcastOpen} onOpenChange={setBroadcastOpen} />

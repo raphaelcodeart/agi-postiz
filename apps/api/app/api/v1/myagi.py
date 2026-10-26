@@ -68,6 +68,13 @@ def _sync_account_status(db: Session, account: OmniChannelAccount, session_statu
 def _to_response(db: Session, account: OmniChannelAccount, session: Optional[dict], detail: Optional[str] = None, session_status: Optional[str] = None) -> MyAgiSessionResponse:
     me = (session or {}).get("me") or {}
     phone = str(me.get("id") or "").split("@", 1)[0] or None
+    # Il numero lo conosce solo il gateway, e solo a telefono collegato: lo
+    # copiamo in external_account_id cosi' l'Inbox puo' mostrare "+39..."
+    # accanto al nome senza interrogare WAHA (il campo per questo canale non
+    # ha altri usi: autenticazione e webhook vanno per id e segreto).
+    if phone and account.external_account_id != phone:
+        account.external_account_id = phone
+        db.commit()
     count = db.query(func.count(OmniConversation.id)).filter(OmniConversation.channel_account_id == account.id).scalar() or 0
     waha_status = session_status or str((session or {}).get("status") or "MISSING")
     if waha_status == "SCAN_QR_CODE" and not detail:

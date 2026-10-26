@@ -884,6 +884,12 @@ class OmniChannelAccountResponse(BaseModel):
     # written in, not one per message) - transient attribute set by
     # list_channel_accounts (api/v1/omnichannel.py), not a real column.
     conversation_count: int = 0
+    # Conversazioni di questo canale che chiedono attenzione adesso (bozza da
+    # approvare oppure messaggi non letti): stessa definizione del pallino in
+    # sidebar (GET /conversations/pending-count), ma per canale, cosi' il
+    # selettore dell'Inbox mostra dove c'e' lavoro. Transiente come sopra.
+    pending_count: int = 0
+    unread_count: int = 0
 
     class Config:
         from_attributes = True

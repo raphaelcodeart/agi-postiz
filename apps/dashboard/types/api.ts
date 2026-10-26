@@ -784,6 +784,9 @@ export interface OmniChannelAccountResponse {
   created_at: string;
   updated_at: string;
   conversation_count: number;
+  /** Conversazioni che chiedono attenzione adesso (bozza da approvare o non lette). */
+  pending_count: number;
+  unread_count: number;
 }
 
 export interface OmniChannelAccountCreate {

@@ -134,3 +134,20 @@ def test_webhook_accepts_only_the_right_secret_and_signature_and_ingests_once(cl
     messages = db.query(OmniMessage).filter(OmniMessage.channel_account_id == account.id).all()
     assert len(messages) == 1 and messages[0].text == "Ciao"
     assert client.post(f"/api/v1/omnichannel-responder/webhooks/myagi/{uuid.uuid4()}/{account.webhook_secret}", content=body, headers={"Content-Type": "application/json"}).status_code == 404
+
+
+def test_il_numero_collegato_viene_ricordato_sul_canale(client, db, admin, admin_token, gateway):
+    headers = admin_token(admin)
+    created = client.post("/api/v1/myagi/sessions", json={"name": "Vendite"}, headers=headers).json()
+    account_id = created["channel_account_id"]
+    gateway.sessions[created["session_name"]].update({"status": "WORKING", "me": {"id": "393331234567@c.us", "pushName": "AGI"}})
+
+    row = client.get(f"/api/v1/myagi/sessions/{account_id}", headers=headers).json()
+    assert row["phone_number"] == "393331234567" and row["push_name"] == "AGI"
+
+    account = db.query(OmniChannelAccount).filter(OmniChannelAccount.id == uuid.UUID(account_id)).one()
+    db.refresh(account)
+    assert account.external_account_id == "393331234567"
+    # ...e l'Inbox lo vede nella lista canali senza passare dal gateway.
+    listed = {r["id"]: r for r in client.get("/api/v1/omnichannel-responder/channel-accounts", headers=headers).json()}
+    assert listed[account_id]["external_account_id"] == "393331234567"
