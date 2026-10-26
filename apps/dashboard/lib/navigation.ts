@@ -22,6 +22,7 @@ import {
   SparklesIcon,
   BookOpenIcon,
   LightbulbIcon,
+  SmartphoneIcon,
 } from "lucide-react";
 
 export interface NavItem {
@@ -95,6 +96,9 @@ export const OMNICHANNEL_RESPONDER_NAV_ITEMS: NavItem[] = [
   { href: "/omnichannel-responder/channels", label: "Canali", icon: RadioIcon },
   { href: "/omnichannel-responder/settings", label: "AI Agent", icon: SparklesIcon },
   { href: "/omnichannel-responder/knowledge-base", label: "Knowledge Base", icon: BookOpenIcon },
+  // Il gateway WhatsApp in casa: i numeri collegati via QR diventano canali
+  // whatsapp_myagi di questa stessa inbox (vedi api/v1/myagi.py).
+  { href: "/myagi", label: "myAGI", icon: SmartphoneIcon },
 ];
 
 // Rendered in the sidebar footer, below everything else - not part of any

@@ -24,6 +24,7 @@ its auth model is fundamentally different (no admin JWT on these paths) -
 never processes anything slow inline, just ingests the message and hands
 off to Celery (spec section 30).
 """
+import json
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
@@ -193,6 +194,47 @@ async def maytapi_webhook(
 
     payload = await request.json()
     messages = connector.parse_webhook(payload)
+    _ingest_and_trigger(db, account, messages)
+    return {"ok": True}
+
+
+@router.post("/webhooks/myagi/{channel_account_id}/{webhook_secret}")
+async def myagi_webhook(
+    channel_account_id: uuid.UUID,
+    webhook_secret: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    WhatsApp via gateway myAGI (WAHA in casa, vedi connectors/whatsapp_myagi.py).
+
+    Stessa forma del webhook Maytapi - segreto nel path - piu' la firma
+    HMAC-SHA512 del corpo (`X-Webhook-Hmac`) che il gateway aggiunge quando la
+    sessione e' configurata con la chiave: per questo serve il corpo grezzo,
+    letto prima del JSON. 404 identico per account inesistente o canale
+    diverso, come per tutti gli altri webhook di questo file.
+    """
+    account = db.query(OmniChannelAccount).filter(
+        OmniChannelAccount.id == channel_account_id,
+        OmniChannelAccount.channel == "whatsapp_myagi",
+    ).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    body = await request.body()
+    connector = get_connector(account)
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    if not connector.verify_webhook(headers, webhook_secret, body):
+        raise HTTPException(status_code=403, detail="Webhook verification failed")
+
+    if account.status == "disabled":
+        return {"ok": True}
+
+    try:
+        payload = json.loads(body or b"{}")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid JSON") from None
+    messages = connector.parse_webhook(payload if isinstance(payload, dict) else {})
     _ingest_and_trigger(db, account, messages)
     return {"ok": True}
 

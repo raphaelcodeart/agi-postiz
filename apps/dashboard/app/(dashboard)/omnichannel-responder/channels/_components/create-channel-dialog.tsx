@@ -18,6 +18,7 @@ const CHANNEL_OPTIONS: { value: OmniChannel; label: string; available: boolean }
   { value: "instagram", label: "Instagram Direct", available: true },
   { value: "whatsapp", label: "WhatsApp Business (Cloud API Meta)", available: true },
   { value: "whatsapp_maytapi", label: "WhatsApp — numero personale (Maytapi)", available: true },
+  { value: "whatsapp_myagi", label: "WhatsApp — numero personale (myAGI, gateway nostro)", available: true },
   { value: "gmail", label: "Gmail", available: true },
   { value: "mock", label: "Test (mock, nessun account reale)", available: true },
 ];
@@ -46,6 +47,7 @@ export function CreateChannelDialog({ open, onOpenChange }: { open: boolean; onO
   const isMeta = META_CHANNELS.includes(channel);
   const isGmail = channel === "gmail";
   const isMaytapi = channel === "whatsapp_maytapi";
+  const isMyAgi = channel === "whatsapp_myagi";
 
   function reset() {
     setChannel("telegram");
@@ -177,6 +179,14 @@ export function CreateChannelDialog({ open, onOpenChange }: { open: boolean; onO
                 né verifica aziendale né template approvati: si risponde liberamente, anche oltre le 24 ore.
               </p>
             </div>
+          )}
+
+          {isMyAgi && (
+            <p className="text-xs text-muted-foreground">
+              Nessuna credenziale: il numero gira sul nostro gateway. Dopo la creazione vai nella pagina{" "}
+              <span className="font-medium">myAGI</span>, premi <span className="font-medium">Avvia</span> e scansiona il QR
+              da WhatsApp → Dispositivi collegati. I messaggi arrivano qui da soli, senza registrare webhook.
+            </p>
           )}
 
           {isGmail && (

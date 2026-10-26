@@ -1146,6 +1146,45 @@ class OmniCustomerCrmProfileResponse(BaseModel):
     message: Optional[str] = None
 
 
+# ------------------------------------------------------------------------------
+# myAGI - gateway WhatsApp in casa (integrations/myagi/, api/v1/myagi.py)
+# ------------------------------------------------------------------------------
+class MyAgiGatewayStatus(BaseModel):
+    configured: bool
+    reachable: bool
+    version: Optional[str] = None
+    engine: Optional[str] = None
+    detail: Optional[str] = None
+
+
+class MyAgiSessionCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+
+
+class MyAgiSessionResponse(BaseModel):
+    """Un canale whatsapp_myagi con lo stato letto ora dal gateway."""
+    channel_account_id: uuid.UUID
+    name: str
+    session_name: str
+    # Stato del canale in omni_channel_accounts (pending/connected/error/disabled).
+    account_status: str
+    # Stato WAHA: STOPPED, STARTING, SCAN_QR_CODE, WORKING, FAILED, oppure
+    # MISSING (sessione mai avviata sul gateway) / UNAVAILABLE (gateway giu').
+    session_status: str
+    phone_number: Optional[str] = None
+    push_name: Optional[str] = None
+    detail: Optional[str] = None
+    conversation_count: int = 0
+    created_at: datetime
+
+
+class MyAgiQrResponse(BaseModel):
+    session_status: str
+    mimetype: Optional[str] = None
+    # Immagine PNG in base64, presente solo quando lo stato e' SCAN_QR_CODE.
+    data: Optional[str] = None
+
+
 class OmniKnowledgeDocumentCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     # I file (pdf, docx, xlsx, csv, txt, md) passano da POST /knowledge-base/upload.

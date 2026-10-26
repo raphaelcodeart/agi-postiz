@@ -41,6 +41,7 @@ from app.integrations.omnichannel.exceptions import ConnectorError
 from app.integrations.omnichannel import ai as omni_ai
 from app.integrations.omnichannel import knowledge
 from app.integrations.omnichannel.crm import tools as crm_tools
+from app.integrations.myagi import waha
 from app.integrations.omnichannel.crm.mamify import MamifyError, MamifyRagClient
 from app.core.security import EncryptionService
 from app.services.ai_settings_service import get_openai_credentials
@@ -242,6 +243,15 @@ def delete_channel_account(account_id: uuid.UUID, db: Session = Depends(get_db),
     it doesn't paper over the passive_deletes bug itself.
     """
     account = _owned_channel_account(db, admin, account_id)
+    # Un canale myAGI ha una sessione WhatsApp sul nostro gateway: va tolta
+    # anche li', altrimenti il telefono resta "collegato" a un canale che non
+    # esiste piu'. Best effort: se il gateway e' giu' il canale si elimina
+    # comunque, la sessione orfana si pulisce dalla pagina myAGI.
+    if account.channel == "whatsapp_myagi" and waha.is_configured():
+        try:
+            waha.WahaClient().delete_session(waha.session_name_for(account.id))
+        except ConnectorError:
+            pass
     db.delete(account)
     try:
         db.commit()

@@ -105,6 +105,28 @@ services:
       # the api container directly over the Docker network.
       - API_INTERNAL_URL=http://api:8000
 
+  # myAGI: gateway WhatsApp in casa (WAHA, Apache-2.0, motore NOWEB senza
+  # browser). Un numero WhatsApp normale si collega via QR dalla pagina
+  # "myAGI" della dashboard e diventa un canale whatsapp_myagi
+  # dell'Omnichannel Responder - vedi docs/OMNICHANNEL_RESPONDER.md.
+  # Nessuna porta pubblicata: ci parla solo l'API sulla rete Docker, con la
+  # chiave MYAGI_WA_API_KEY. Le sessioni (le "credenziali" del telefono
+  # collegato) vivono nel volume: senza, ogni riavvio richiede un nuovo QR.
+  myagi_wa:
+    image: devlikeapro/waha:noweb
+    container_name: agi_post_myagi_wa_prod
+    restart: always
+    environment:
+      - WAHA_API_KEY=${MYAGI_WA_API_KEY}
+      - WHATSAPP_DEFAULT_ENGINE=NOWEB
+      - WAHA_PRINT_QR=false
+      - WHATSAPP_RESTART_ALL_SESSIONS=true
+      - WAHA_BASE_URL=http://myagi_wa:3000
+      - WAHA_DASHBOARD_ENABLED=false
+      - WHATSAPP_SWAGGER_ENABLED=false
+    volumes:
+      - myagi_sessions_prod:/app/.sessions
+
   nginx:
     image: nginx:1.25-alpine
     container_name: agi_post_nginx_prod
@@ -133,6 +155,7 @@ services:
       - certbot_conf:/etc/letsencrypt
 
 volumes:
+  myagi_sessions_prod:
   postgres_data_prod:
   redis_data_prod:
   media_storage_prod:

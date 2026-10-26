@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     # CRM Mamify per l'Omnichannel Responder: ripiego a livello di
     # installazione, la chiave salvata dalla pagina AI Agent vince sempre.
     MAMIFY_RAG_API_KEY: Optional[str] = None
+    # Gateway WhatsApp myAGI (container WAHA in docker-compose, vedi
+    # integrations/myagi/). Vuoto = funzione non disponibile, il resto non
+    # cambia. L'URL del webhook che il gateway chiama e' quello interno
+    # dell'API nella rete Docker.
+    MYAGI_WA_URL: Optional[str] = None
+    MYAGI_WA_API_KEY: Optional[str] = None
+    MYAGI_WEBHOOK_BASE_URL: str = "http://api:8000"
     OPENAI_MODEL: str = "gpt-4o-mini"
 
     # --- Email transazionali (SMTP) ---

@@ -196,6 +196,16 @@ link di reset password. Senza, chi si registra resta fermo alla schermata
 | `EMAIL_FROM_ADDRESS` | il mittente, es. `noreply@mamify.ai` |
 | `EMAIL_REPLY_TO` | una casella letta da qualcuno: chi risponde a un'email di benvenuto merita di essere letto |
 
+**Gateway WhatsApp myAGI** (facoltativo, [OMNICHANNEL_RESPONDER.md §11](./OMNICHANNEL_RESPONDER.md#11-configurazione-e-come-collegare-telegram--facebook--instagram--whatsapp--maytapi--myagi--gmail)): il servizio `myagi_wa` di `docker-compose.prod.yml` (immagine `devlikeapro/waha:noweb`) fa da "WhatsApp Web" per i numeri collegati via QR dalla pagina myAGI della dashboard. Non pubblica porte.
+
+| Variabile | Valore |
+|---|---|
+| `MYAGI_WA_URL` | `http://myagi_wa:3000` (nome del servizio sulla rete Docker) |
+| `MYAGI_WA_API_KEY` | stringa casuale lunga (es. `python3 -c 'import secrets;print(secrets.token_hex(32))'`); la stessa variabile è letta dal container come `WAHA_API_KEY` |
+| `MYAGI_WEBHOOK_BASE_URL` | `http://api:8000`: l'URL **interno** dell'API che il gateway chiama per consegnare i messaggi |
+
+Le sessioni (il telefono "appaiato") stanno nel volume `myagi_sessions_prod`: cancellarlo vuol dire riscansionare tutti i QR. Vuoto `MYAGI_WA_URL` = pagina myAGI disattiva, tutto il resto invariato.
+
 Tre cose da sapere prima di scegliere il mittente:
 
 1. **Il dominio del mittente deve autorizzare in SPF il server SMTP che usi**,

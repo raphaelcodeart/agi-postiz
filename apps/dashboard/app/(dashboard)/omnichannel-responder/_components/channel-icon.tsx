@@ -13,6 +13,7 @@ const CHANNEL_META: Record<OmniChannel, { label: string; icon: typeof SendIcon; 
   // nell'inbox i due canali compaiono affiancati e l'operatore deve sapere da
   // quale numero sta rispondendo.
   whatsapp_maytapi: { label: "WhatsApp (Maytapi)", icon: MessageCircleIcon, className: "bg-teal-500/15 text-teal-600 dark:text-teal-400" },
+  whatsapp_myagi: { label: "WhatsApp (myAGI)", icon: MessageCircleIcon, className: "bg-lime-500/15 text-lime-700 dark:text-lime-400" },
   instagram: { label: "Instagram", icon: CameraIcon, className: "bg-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-400" },
   facebook: { label: "Facebook", icon: MessageSquareIcon, className: "bg-blue-500/15 text-blue-600 dark:text-blue-400" },
   gmail: { label: "Gmail", icon: MailIcon, className: "bg-red-500/15 text-red-600 dark:text-red-400" },

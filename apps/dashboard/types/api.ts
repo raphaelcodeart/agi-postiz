@@ -746,6 +746,7 @@ export type OmniChannel =
   | "telegram"
   | "whatsapp"
   | "whatsapp_maytapi"
+  | "whatsapp_myagi"
   | "instagram"
   | "facebook"
   | "gmail"
@@ -1283,4 +1284,45 @@ export interface CampaignProposalUpdatePayload {
   target_platforms?: string[];
   media_file_id?: string | null;
   suggested_scheduled_at?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// myAGI - gateway WhatsApp in casa (api/v1/myagi.py). Un "numero" e' un canale
+// whatsapp_myagi dell'Omnichannel piu' una sessione sul gateway WAHA.
+// ---------------------------------------------------------------------------
+export interface MyAgiGatewayStatus {
+  configured: boolean;
+  reachable: boolean;
+  version: string | null;
+  engine: string | null;
+  detail: string | null;
+}
+
+export type MyAgiSessionStatus =
+  | "STOPPED"
+  | "STARTING"
+  | "SCAN_QR_CODE"
+  | "PASSKEY_REQUIRED"
+  | "WORKING"
+  | "FAILED"
+  | "MISSING"
+  | "UNAVAILABLE";
+
+export interface MyAgiSessionResponse {
+  channel_account_id: string;
+  name: string;
+  session_name: string;
+  account_status: string;
+  session_status: MyAgiSessionStatus | string;
+  phone_number: string | null;
+  push_name: string | null;
+  detail: string | null;
+  conversation_count: number;
+  created_at: string;
+}
+
+export interface MyAgiQrResponse {
+  session_status: MyAgiSessionStatus | string;
+  mimetype: string | null;
+  data: string | null;
 }

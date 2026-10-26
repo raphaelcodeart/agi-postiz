@@ -4,6 +4,7 @@ from app.core.config import settings
 from app.api.v1 import auth, users, buffer, media, campaigns, publications, settings as settings_api, ai
 from app.api.v1 import blog_writer_sites, blog_writer_articles
 from app.api.v1 import omnichannel, omnichannel_webhooks
+from app.api.v1 import myagi
 from app.api.v1 import statistics
 from app.api.v1 import public_stats
 from app.api.v1 import portal
@@ -51,6 +52,7 @@ app.include_router(blog_writer_sites.router, prefix=f"{settings.API_V1_STR}/blog
 app.include_router(blog_writer_articles.router, prefix=f"{settings.API_V1_STR}/blog-writer/articles", tags=["blog-writer"])
 app.include_router(omnichannel.router, prefix=f"{settings.API_V1_STR}/omnichannel-responder", tags=["omnichannel-responder"])
 app.include_router(omnichannel_webhooks.router, prefix=f"{settings.API_V1_STR}/omnichannel-responder", tags=["omnichannel-responder"])
+app.include_router(myagi.router, prefix=f"{settings.API_V1_STR}/myagi", tags=["myagi"])
 app.include_router(statistics.router, prefix=f"{settings.API_V1_STR}/statistics", tags=["statistics"])
 # Proposte di campagna scritte dai promoter: qui il lato amministratore
 # (elenco/rifiuto). L'approvazione e' la creazione della campagna stessa, vedi

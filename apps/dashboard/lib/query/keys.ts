@@ -66,6 +66,11 @@ export const queryKeys = {
     analytics: () => ["omnichannel", "analytics"] as const,
     pendingCount: () => ["omnichannel", "pending-count"] as const,
   },
+  myagi: {
+    status: () => ["myagi", "status"] as const,
+    sessions: () => ["myagi", "sessions"] as const,
+    qr: (accountId: string) => ["myagi", "qr", accountId] as const,
+  },
   statistics: {
     dashboard: () => ["statistics", "dashboard"] as const,
     userDetail: (userId: string) => ["statistics", "user-detail", userId] as const,
