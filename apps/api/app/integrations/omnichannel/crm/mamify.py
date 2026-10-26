@@ -34,6 +34,7 @@ ERR_NOT_FOUND = "customer_not_found"
 ERR_AMBIGUOUS = "customer_ambiguous"
 ERR_RATE_LIMITED = "rate_limited"  # nostro: HTTP 429
 ERR_UNAVAILABLE = "crm_unavailable"  # nostro: rete/timeout/risposta non JSON
+ERR_WRONG_ENDPOINT = "wrong_endpoint"  # il server non espone il plugin RAG a quell'URL
 
 
 class MamifyError(Exception):
@@ -98,6 +99,12 @@ class MamifyRagClient:
         except ValueError:
             raise MamifyError(ERR_UNAVAILABLE, f"Risposta del CRM non valida (HTTP {response.status_code})", response.status_code) from None
 
+        # Il dispatcher API di Mamify, quando il percorso non corrisponde a
+        # nessun plugin attivo, risponde HTTP 200 con la lista
+        # ``["status","wrong_endpoint"]`` (non il consueto oggetto): vuol
+        # dire che il plugin RAG non e' pubblicato a quell'indirizzo.
+        if isinstance(payload, list) and ERR_WRONG_ENDPOINT in payload:
+            raise MamifyError(ERR_WRONG_ENDPOINT, "Il CRM non espone l'API RAG a questo indirizzo", response.status_code)
         if not isinstance(payload, dict):
             raise MamifyError(ERR_UNAVAILABLE, "Risposta del CRM non valida", response.status_code)
 
@@ -162,6 +169,15 @@ class MamifyRagClient:
                 return {"status": "invalid", "message": "Chiave rifiutata dal CRM: controlla di averla copiata per intero."}
             if e.code == ERR_NO_PERMISSION:
                 return {"status": "no_permission", "message": "Chiave valida ma senza il permesso sugli endpoint 'customer': spunta il gruppo Plugins > Mamify > Rag sulla chiave."}
+            if e.code == ERR_WRONG_ENDPOINT:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Il CRM risponde 'wrong_endpoint' su {self.base_url}: il plugin API per il RAG non risulta "
+                        "pubblicato a questo indirizzo. La chiave non viene nemmeno controllata. Chiedi a Mamify di "
+                        "attivare il plugin Rag o di indicare l'URL corretto."
+                    ),
+                }
             if e.code in (ERR_RATE_LIMITED, ERR_UNAVAILABLE):
                 return {"status": "unavailable", "message": e.message}
             return {"status": "error", "message": f"Il CRM ha risposto {e.code}: {e.message}".strip()}

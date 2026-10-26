@@ -281,6 +281,18 @@ def test_check_key_non_legge_dati_e_distingue_i_tre_esiti(monkeypatch):
         assert MamifyRagClient("k").check_key()["status"] == expected
 
 
+def test_check_key_riconosce_wrong_endpoint_del_dispatcher_mamify(monkeypatch):
+    # Risposta reale del server quando il plugin RAG non e' pubblicato:
+    # HTTP 200 con una lista, non un oggetto.
+    monkeypatch.setattr(httpx, "get", lambda url, **kw: httpx.Client(transport=_transport(lambda r: httpx.Response(200, json=["status", "wrong_endpoint"]))).get(url, **kw))
+    result = MamifyRagClient("k").check_key()
+    assert result["status"] == "error"
+    assert "wrong_endpoint" in result["message"] and "mamify.app" in result["message"]
+    with pytest.raises(MamifyError) as exc:
+        MamifyRagClient("k").wallets(customer_id="1")
+    assert exc.value.code == "wrong_endpoint"
+
+
 def test_nessun_identificativo_e_un_errore_locale_senza_chiamata():
     with pytest.raises(MamifyError) as exc:
         MamifyRagClient("k").find_customer()
