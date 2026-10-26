@@ -9,6 +9,8 @@ altro, una proposta che risulta approvata senza che nessuna campagna esista.
 """
 import uuid
 
+from datetime import datetime, timezone
+
 import pytest
 
 from app.models.administrator import Administrator
@@ -20,8 +22,18 @@ from app.models.user import User
 
 @pytest.fixture()
 def people(db):
-    anna = User(name="Anna", email="anna@proposte.test", status="active", password_hash="x")
-    bruno = User(name="Bruno", email="bruno@proposte.test", status="active", password_hash="x")
+    # email_verified_at e privacy_accepted_at valorizzati: sono promoter che il portale lo stanno gia'
+    # usando. Senza, ogni rotta risponderebbe 403 - vedi get_verified_portal_user
+    # in app/api/v1/portal.py.
+    confermato = datetime.now(timezone.utc)
+    anna = User(
+        name="Anna", email="anna@proposte.test", status="active", password_hash="x",
+        email_verified_at=confermato, privacy_accepted_at=confermato, profile_completed_at=confermato,
+    )
+    bruno = User(
+        name="Bruno", email="bruno@proposte.test", status="active", password_hash="x",
+        email_verified_at=confermato, privacy_accepted_at=confermato, profile_completed_at=confermato,
+    )
     admin = Administrator(
         email="admin@proposte.test", password_hash="x", full_name="Amministratore", is_active=True
     )

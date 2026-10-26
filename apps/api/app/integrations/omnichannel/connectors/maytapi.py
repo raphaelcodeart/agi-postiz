@@ -275,7 +275,25 @@ class MaytapiConnector(Connector):
                 status_code=response.status_code,
             )
 
-        if response.status_code >= 400 or not data.get("success", False):
-            detail = data.get("message") or data.get("error") or "errore sconosciuto"
+        # Attenzione: setWebhook NON restituisce `success`, a differenza di
+        # /status e /sendMessage. In caso di successo risponde 200 con la
+        # configurazione aggiornata del prodotto - `{"pid": ..., "webhook":
+        # "<url>", "phone_limit": ...}` - e basta. Pretendere `success: True`
+        # qui faceva fallire ogni registrazione andata a buon fine (visto in
+        # produzione il 2026-09-22: webhook registrato davvero, dashboard che
+        # mostrava "errore sconosciuto"). Si fallisce quindi solo se l'HTTP e'
+        # un errore o se `success` e' esplicitamente False.
+        if response.status_code >= 400 or data.get("success") is False:
+            detail = data.get("message") or data.get("error") or response.text[:300] or "errore sconosciuto"
             raise ConnectorError(f"Impossibile registrare il webhook Maytapi: {detail}", status_code=response.status_code)
+
+        # Maytapi rimanda l'URL memorizzato: se non e' quello appena inviato, la
+        # chiamata e' passata ma il webhook non e' il nostro - meglio dirlo
+        # subito che scoprirlo dai messaggi che non arrivano.
+        stored = data.get("webhook")
+        if stored and stored != webhook_url:
+            raise ConnectorError(
+                f"Maytapi ha accettato la richiesta ma ha memorizzato un altro webhook: {stored}",
+                status_code=response.status_code,
+            )
         return data

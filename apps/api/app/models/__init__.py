@@ -1,6 +1,8 @@
 from app.db.session import Base
 from app.models.administrator import Administrator
 from app.models.user import User, UserGroup, user_group_association
+from app.models.auth_token import UserAuthToken
+from app.models.user_notification import UserNotification
 from app.models.buffer import BufferConnection, BufferOrganization, SocialChannel
 from app.models.media import MediaFile
 from app.models.blog_writer import WordpressSite, BlogArticle, BlogPublication
@@ -16,6 +18,8 @@ __all__ = [
     "User",
     "UserGroup",
     "user_group_association",
+    "UserAuthToken",
+    "UserNotification",
     "BufferConnection",
     "BufferOrganization",
     "SocialChannel",

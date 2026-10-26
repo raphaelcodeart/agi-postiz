@@ -1,10 +1,10 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as omnichannelService from "@/services/omnichannel";
 import { queryKeys } from "@/lib/query/keys";
 import type { ListConversationsParams } from "@/services/omnichannel";
-import type { OmniAIAgentConfigUpdate, OmniBroadcastRequest, OmniChannelAccountCreate, OmniChannelAccountUpdate, OmniCustomerUpdate, OmniKnowledgeDocumentCreate, OmniTagCreate } from "@/types/api";
+import type { OmniAIAgentConfigUpdate, OmniBroadcastRequest, OmniChannelAccountCreate, OmniChannelAccountUpdate, OmniCustomerUpdate, OmniKnowledgeCompanyCreate, OmniKnowledgeCompanyUpdate, OmniKnowledgeDocumentCreate, OmniKnowledgeDocumentUpdate, OmniKnowledgeListParams, OmniTagCreate } from "@/types/api";
 
 // Channel accounts
 export function useChannelAccounts() {
@@ -257,24 +257,131 @@ export function useUpdateAIAgentConfig() {
   });
 }
 
+export function useCheckCrmKey() {
+  return useMutation({ mutationFn: () => omnichannelService.checkCrmKey() });
+}
+
+// A richiesta (enabled=false finche' l'operatore non clicca): ogni lettura e'
+// una chiamata al CRM e una riga di audit, non va fatta a ogni apertura.
+export function useCustomerCrmProfile(customerId: string | null, channel: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.omnichannel.customerCrmProfile(customerId ?? "", channel),
+    queryFn: () => omnichannelService.getCustomerCrmProfile(customerId ?? "", channel),
+    enabled: enabled && !!customerId,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
 // Knowledge base
-export function useKnowledgeDocuments() {
-  return useQuery({ queryKey: queryKeys.omnichannel.knowledgeBase(), queryFn: omnichannelService.listKnowledgeDocuments });
+// Tutte le mutazioni invalidano anche le statistiche: la chiave delle stats sta
+// sotto quella della lista, quindi basta invalidare il prefisso.
+function useInvalidateKnowledge() {
+  const queryClient = useQueryClient();
+  return () => queryClient.invalidateQueries({ queryKey: queryKeys.omnichannel.knowledgeBase() });
+}
+
+export function useKnowledgeDocuments(params: OmniKnowledgeListParams = {}) {
+  return useQuery({
+    queryKey: queryKeys.omnichannel.knowledgeDocuments(params),
+    queryFn: () => omnichannelService.listKnowledgeDocuments(params),
+    placeholderData: keepPreviousData,
+    // Gli embedding li calcola il worker qualche secondo dopo il salvataggio:
+    // finche' ne manca qualcuno si ricontrolla, poi si smette.
+    refetchInterval: (query) =>
+      query.state.data?.some((doc) => doc.embedded_chunks < doc.chunk_count && !doc.error_message) ? 4000 : false,
+  });
+}
+
+export function useKnowledgeDocument(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.omnichannel.knowledgeDocument(id ?? ""),
+    queryFn: () => omnichannelService.getKnowledgeDocument(id as string),
+    enabled: !!id,
+  });
+}
+
+export function useKnowledgeCompanies() {
+  return useQuery({ queryKey: queryKeys.omnichannel.knowledgeCompanies(), queryFn: omnichannelService.listKnowledgeCompanies });
+}
+
+export function useCreateKnowledgeCompany() {
+  const invalidate = useInvalidateKnowledge();
+  return useMutation({
+    mutationFn: (payload: OmniKnowledgeCompanyCreate) => omnichannelService.createKnowledgeCompany(payload),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateKnowledgeCompany() {
+  const invalidate = useInvalidateKnowledge();
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: OmniKnowledgeCompanyUpdate }) => omnichannelService.updateKnowledgeCompany(id, payload),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteKnowledgeCompany() {
+  const invalidate = useInvalidateKnowledge();
+  return useMutation({
+    mutationFn: ({ id, deleteDocuments }: { id: string; deleteDocuments: boolean }) => omnichannelService.deleteKnowledgeCompany(id, deleteDocuments),
+    onSuccess: invalidate,
+  });
+}
+
+export function useMoveKnowledgeDocuments() {
+  const invalidate = useInvalidateKnowledge();
+  return useMutation({
+    mutationFn: ({ ids, companyId }: { ids: string[]; companyId: string | null }) => omnichannelService.moveKnowledgeDocuments(ids, companyId),
+    onSuccess: invalidate,
+  });
+}
+
+export function useKnowledgeStats() {
+  return useQuery({ queryKey: queryKeys.omnichannel.knowledgeStats(), queryFn: omnichannelService.getKnowledgeStats });
 }
 
 export function useCreateKnowledgeDocument() {
-  const queryClient = useQueryClient();
+  const invalidate = useInvalidateKnowledge();
   return useMutation({
     mutationFn: (payload: OmniKnowledgeDocumentCreate) => omnichannelService.createKnowledgeDocument(payload),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.omnichannel.knowledgeBase() }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateKnowledgeDocument() {
+  const invalidate = useInvalidateKnowledge();
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: OmniKnowledgeDocumentUpdate }) => omnichannelService.updateKnowledgeDocument(id, payload),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUploadKnowledgeFile() {
+  const invalidate = useInvalidateKnowledge();
+  return useMutation({
+    mutationFn: ({ file, companyId }: { file: File; companyId?: string | null }) => omnichannelService.uploadKnowledgeFile(file, companyId),
+    onSettled: invalidate,
   });
 }
 
 export function useDeleteKnowledgeDocument() {
-  const queryClient = useQueryClient();
+  const invalidate = useInvalidateKnowledge();
   return useMutation({
     mutationFn: (id: string) => omnichannelService.deleteKnowledgeDocument(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.omnichannel.knowledgeBase() }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useReindexKnowledgeBase() {
+  const invalidate = useInvalidateKnowledge();
+  return useMutation({ mutationFn: omnichannelService.reindexKnowledgeBase, onSuccess: invalidate });
+}
+
+export function useSearchKnowledgeBase() {
+  return useMutation({
+    mutationFn: ({ query, generateReply, companyId }: { query: string; generateReply: boolean; companyId?: string | null }) =>
+      omnichannelService.searchKnowledgeBase(query, generateReply, companyId),
   });
 }
 

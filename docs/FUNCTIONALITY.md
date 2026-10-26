@@ -68,6 +68,19 @@ Per i dettagli di deploy/infrastruttura vedi [DEPLOYMENT.md](./DEPLOYMENT.md); p
 - Un `SocialChannel` è **un singolo profilo social** connesso a Buffer (una pagina FB, un profilo IG, un canale YouTube...). `is_active` e `publication_mode` (`automatic`/`notification`/`approval`/`disabled`) determinano se una campagna può davvero pubblicarci sopra — `disabled` lo esclude sempre dal targeting, a prescindere dagli altri criteri.
 - `SocialChannel.external_link` è l'URL pubblico reale del profilo/pagina sul social network (`Channel.externalLink` di Buffer), popolato dal sync — non un URL Buffer. Può essere `null` se Buffer non lo espone per quella piattaforma. La pagina "Canali" della dashboard lo usa per aprire il profilo in una nuova scheda.
 
+### Requisito "almeno due canali social" e avvisi via email (2026-10-25)
+
+Il progetto chiede a ogni promoter almeno `MIN_SOCIAL_CHANNELS_PER_USER` (default **2**) canali social collegati e utilizzabili. La pagina **Utenti → Canali insufficienti** (`/users/channel-requirement`, raggiungibile dal pulsante con il contatore rosso sopra la lista Utenti) elenca chi è sotto soglia e permette di avvisarlo via email.
+
+- **Cosa conta come canale collegato**: esattamente ciò che una campagna potrebbe usare, cioè la stessa regola di `campaign_resolver` — connessione `connected`, canale `is_active`, non rimosso dall'utente (`deleted_at IS NULL`), `publication_mode != disabled`. Due canali di cui uno spento, o appesi a una connessione scollegata, non fanno due. Il conteggio è una sola `GROUP BY` per tutti gli utenti (`services/channel_requirement_service.py::usable_channels_by_user`), non una query per utente.
+- **Chi compare**: tutti gli utenti non cancellati con meno canali del richiesto, ordinati prima per numero di canali (chi non ne ha nessuno in testa) e poi per nome. Il filtro stato è `active` di default nella pagina — sono gli utenti che le campagne cercano — ma inattivi e sospesi restano raggiungibili dal filtro. Il contatore `UserSummaryResponse.below_channel_requirement` sulla lista Utenti conta solo gli attivi.
+- **L'email** (`services/email/templates.py::channel_requirement_email`, stessa impaginazione delle email di benvenuto/reset) dice quanti canali servono, elenca quelli già contati, spiega i tre passi (entra nel portale — o registrati con lo stesso indirizzo se non hai ancora una password —, apri "I tuoi canali", collega i mancanti) e porta con un pulsante a `{PORTAL_PUBLIC_BASE_URL}/portal/channels`. Due varianti di tono: zero canali ("partiamo") e uno ("manca poco"). È dichiarata comunicazione di servizio, non pubblicità. La frase finale invita a rispondere all'email solo se `EMAIL_REPLY_TO` è impostato: il mittente noreply non è letto da nessuno. Parte dal worker via `send_transactional_email` come le altre.
+- **Ogni invio lascia traccia** nella tabella `user_notifications` (vedi [DATABASE.md §4](./DATABASE.md#4-utenti-e-gruppi)): chi, quando, da quale amministratore, a quale indirizzo, con quanti canali aveva al momento. La pagina mostra "ultimo avviso" e quante volte ogni persona è stata avvisata.
+- **Invio singolo** (`POST /users/{id}/channel-requirement/notify`): sempre, anche se l'utente è stato avvisato un minuto fa — è una scelta esplicita su una persona precisa.
+- **Notifica a tutti** (`POST /users/channel-requirement/notify-all`): pulsante grande in alto, con conferma che dice quanti riceveranno il messaggio. Salta chi è stato avvisato negli ultimi `CHANNEL_NOTICE_COOLDOWN_DAYS` (default **7**) giorni, così premerlo due volte in una settimana non manda due volte lo stesso messaggio; l'interruttore "Includi chi è stato avvisato di recente" (`skip_notified_within_days: 0`) disattiva il cooldown. Rispetta il filtro stato attivo nella pagina. Un errore su un destinatario non ferma gli altri: l'esito riporta inviati / saltati / falliti.
+- **Senza SMTP configurato** (`settings.email_enabled` falso) la lista funziona ma i pulsanti sono disattivati con un avviso in pagina; gli endpoint di invio rispondono `503` e non registrano nulla — un avviso "inviato" che nessuno ha ricevuto sarebbe peggio di nessun avviso.
+- Endpoint: `GET /users/channel-requirement?status_filter=&search=` → `ChannelRequirementResponse` (soglia, cooldown, `email_enabled`, contatori, lista utenti con canali e storia avvisi). Test: `tests/api/test_users_channel_requirement.py`, `tests/services/test_email_templates.py`.
+
 ---
 
 ## 4. Integrazione Buffer: mock vs production
@@ -328,6 +341,85 @@ loro metriche e il link al post sul social. C'e' anche l'export Excel (ai due
 livelli) e un bottone "Aggiorna statistiche" che sincronizza **solo** i propri
 post. Dettaglio completo, e il perche' di cosa il promoter puo' e non puo' fare
 rispetto all'amministratore, in [STATISTICS.md ss11](./STATISTICS.md#11-le-statistiche-nel-portale-del-promoter).
+
+### Profilo obbligatorio al primo accesso: città, CAP e gruppi (2026-10-25)
+
+Subito dopo la conferma dell'indirizzo, il portale si ferma una seconda volta: una finestra non richiudibile (`apps/dashboard/app/portal/(app)/profile-gate.tsx`, stessa cornice della finestra di conferma email; il modulo è `profile-form.tsx`) chiede **città**, **codice postale** e **almeno un gruppo di partecipazione** tra quelli esistenti (`user_groups`, con nome e descrizione). Finché non è compilata, l'utente non vede nessuna pagina e non può collegare i canali.
+
+- **Il blocco vero è nell'API**: `get_verified_portal_user` risponde `403 profile_incomplete` finché `users.profile_completed_at` è NULL, su ogni rotta del portale (canali, campagne, statistiche, proposte, connect). Le sole due rotte raggiungibili a profilo incompleto, tramite la dipendenza intermedia `get_unlocked_portal_user` (indirizzo confermato, profilo non richiesto), sono `GET /portal/groups` e `POST /portal/profile`. `/me` resta su `get_current_portal_user` come sempre ed espone `profile_completed`, `city`, `postal_code`, `group_ids`.
+- **`POST /portal/profile`** (`PortalProfileRequest`: `city` 2–120 caratteri, `postal_code` 3–20 alfanumerici, `group_ids` almeno uno) salva i tre dati e **sostituisce** `User.groups` con i gruppi scelti — sono gli stessi gruppi che il targeting delle campagne (`selected_groups`) usa, quindi l'utente si trova già dentro i gruppi che ha scelto. Un id di gruppo inesistente è un `422` e non un salvataggio parziale. `profile_completed_at` si imposta alla prima compilazione e non si tocca più.
+- **Vale anche per chi era già iscritto**: non abbiamo città, CAP e gruppi per nessuno, quindi la finestra appare a tutti una volta al primo accesso dopo l'aggiornamento. La migration (`f2c7a9e3d4b1`) non retrodata nulla.
+- **Elenco gruppi pensato per decine di voci** (`profile-form.tsx`): sopra 6 gruppi compare una ricerca che filtra per nome e descrizione ignorando maiuscole e accenti; l'elenco scorre dentro un riquadro ad altezza fissa, così il popup non si allunga e il pulsante di salvataggio resta a portata; i gruppi scelti sono riepilogati sopra l'elenco come chip rimovibili con un contatore, quindi una scelta fatta prima di filtrare non sparisce dalla vista. Con un filtro senza risultati c'è il link "Mostra tutti".
+- **Modificabile dopo, dalle Impostazioni del portale**: la pagina `/portal/settings` (`app/portal/(app)/settings/`, raggiungibile cliccando il proprio nome o l'icona dell'ingranaggio nella testata) mostra nome, email e azienda in sola lettura e permette di cambiare città, CAP e gruppi con lo stesso modulo del popup (`profile-form.tsx`, condiviso tra i due) e la stessa rotta `POST /portal/profile`: i gruppi scelti sostituiscono quelli attuali e `profile_completed_at` non si sposta. Nome ed email non si cambiano da qui: l'indirizzo è quello confermato.
+- **Lato amministrazione**: `city`, `postal_code` e `profile_completed_at` compaiono in `UserResponse`, nel dettaglio utente ("Città / CAP", "Profilo portale") e nel form di creazione/modifica (campi facoltativi: l'amministratore può correggerli, ma non li deve inserire lui).
+- Test: `tests/api/test_portal_profile.py`.
+
+### Conferma dell'indirizzo, consenso e reset password (2026-09-24)
+
+Chi si registra riceve un'email di benvenuto con un link che fa due cose insieme:
+conferma che l'indirizzo è suo e vale come accettazione di informativa privacy e
+termini di servizio. Il testo lo dichiara e linka entrambi i documenti **sopra**
+il pulsante, non sotto: un consenso raccolto con un link che dice solo "conferma"
+non è un consenso difendibile.
+
+Finché non ha cliccato, il portale non si apre. L'utente accede, e al posto della
+sua area trova una finestra che non si chiude — «Controlla la tua email» — con un
+bottone per farsela rimandare. La finestra è una spiegazione, non una difesa:
+vive nel browser e chiunque può scavalcarla. **Il blocco vero è nell'API**, nella
+dipendenza `get_verified_portal_user` (`app/api/v1/portal.py`), che risponde
+`403 email_not_verified` su ogni rotta del portale finché manca la conferma
+dell'indirizzo o l'accettazione della privacy. Le uniche due eccezioni sono
+`/portal/me`, da cui il portale scopre di dover mostrare la finestra, e il rinvio
+dell'email.
+
+Dalla pagina di accesso c'è anche **«Hai dimenticato la password?»**: si inserisce
+l'indirizzo e arriva un link per sceglierne una nuova. L'endpoint risponde sempre
+allo stesso modo, indirizzo conosciuto o no, per la stessa ragione per cui
+l'accesso non distingue email sconosciuta da password sbagliata — altrimenti
+diventerebbe un modo per sapere chi ha un account qui.
+
+**I token** (`user_auth_tokens`, `app/services/auth_tokens.py`) valgono per la
+conferma e per il reset, e seguono quattro regole: il database ne conserva solo
+lo SHA-256 (il valore in chiaro esiste solo nella casella del destinatario), sono
+monouso, scadono (72 ore la conferma, 60 minuti il reset), e chiederne uno nuovo
+spegne il precedente. Un cambio password spegne ogni altro link vivo su
+quell'account. C'è un limite di cinque richieste all'ora per utente e per tipo,
+altrimenti questi endpoint sarebbero un modo gratuito per riempire la casella di
+chiunque di email che arrivano davvero da noi.
+
+**Le email** (`app/services/email/`) sono HTML a tabelle con gli stili in linea,
+perché i client di posta non sono browser (Outlook impagina col motore di Word),
+e ognuna ha la sua versione a solo testo. Il marchio viaggia **dentro** il
+messaggio come allegato `cid:`, non come immagine remota: si vede anche a
+immagini bloccate e non somiglia a un pixel di tracciamento. Il PNG si rigenera
+dalle stesse coordinate del `BrandMark` del portale con
+`python3 scripts/render-email-logo.py`. L'invio passa da Celery
+(`app.tasks.email`): una registrazione non deve fallire perché un server di posta
+è lento, e se il broker non risponde l'account resta creato e l'email si può
+richiedere.
+
+**Migrazione e utenti esistenti.** `a4f19c3b7d52` aggiunge `users.email_verified_at`,
+`users.privacy_accepted_at`, `users.verification_retroactive` e la tabella
+`user_auth_tokens`. **Non** considera confermati gli account esistenti: quando si
+sono iscritti informativa privacy e termini non c'erano, e retrodatare il
+consenso vorrebbe dire registrare un'accettazione mai data. Al primo accesso dopo
+il deploy trovano quindi la finestra bloccante, in una variante dedicata («Una
+conferma per continuare») che spiega perché e offre **«Inviami l'email»** invece di
+dire di controllare una posta in cui non c'è niente (`/portal/me` espone
+`verification_email_sent`). L'email che ricevono è la stessa di conferma, ma nella
+versione per chi c'era già (`verification_retroactive`, vero per chi aveva una
+password al momento della migrazione): niente «benvenuto», stesso consenso
+esplicito. Gli utenti creati da un amministratore e mai registrati non hanno
+password e seguiranno la strada dei nuovi iscritti.
+
+**Il portale si apre con entrambe le date** (`email_verified_at` e
+`privacy_accepted_at`). Il reset della password conferma l'indirizzo ma **non** la
+privacy, perché quell'email non la nomina: un iscritto di vecchia data che passa
+dal reset si ritrova comunque davanti alla finestra che gliela chiede.
+
+Configurazione SMTP in [DEPLOYMENT.md §4](./DEPLOYMENT.md#4-configurare-il-file-env).
+Senza `SMTP_PASSWORD` l'invio resta spento: gli utenti si registrano ma restano
+fermi alla finestra di attesa.
 
 ---
 

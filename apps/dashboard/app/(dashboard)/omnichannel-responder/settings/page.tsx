@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { SaveIcon, ZapIcon, ShieldCheckIcon } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
@@ -17,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { useAIAgentConfig, useUpdateAIAgentConfig } from "@/hooks/use-omnichannel";
 import { ApiError } from "@/lib/api/client";
 import type { OmniAIAgentConfigResponse } from "@/types/api";
+import { CrmSection } from "./_components/crm-section";
 
 const TONE_OPTIONS = [
   { value: "professionale", label: "Professionale" },
@@ -199,6 +201,8 @@ export default function OmnichannelSettingsPage() {
         }}
       />
 
+      {config && <CrmSection config={config} />}
+
       <div className="space-y-4 rounded-lg border p-4">
         <div className="space-y-1.5">
           <Label>Nome assistente</Label>
@@ -217,6 +221,11 @@ export default function OmnichannelSettingsPage() {
             className="field-sizing-fixed h-56 resize-y overflow-y-auto"
             placeholder="Sei l'assistente clienti di..."
           />
+          <p className="text-xs text-muted-foreground">
+            {form.system_prompt.length.toLocaleString("it-IT")} caratteri · circa {Math.ceil(form.system_prompt.length / 4).toLocaleString("it-IT")} token inviati a ogni risposta.
+            Qui va solo chi è il bot e come parla: prodotti, prezzi, procedure e regole su argomenti specifici mettili nella{" "}
+            <Link href="/omnichannel-responder/knowledge-base" className="underline">Knowledge Base</Link>, dove il bot li usa solo quando servono.
+          </p>
         </div>
 
         <div className="grid grid-cols-2 gap-4">

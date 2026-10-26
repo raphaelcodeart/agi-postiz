@@ -24,6 +24,7 @@ __pycache__/
 
 # Database backups (contain real data - keep them off git, download/store separately)
 backups/*.sql
+backups/*.sql.gz
 !backups/.gitkeep
 
 # Weekly full DB backups (schema + data) - local-only on purpose, never pushed

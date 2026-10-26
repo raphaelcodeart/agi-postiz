@@ -33,6 +33,11 @@ export interface UserResponse {
   email: string;
   company_name: string | null;
   status: UserStatus;
+  city: string | null;
+  postal_code: string | null;
+  // Quando l'utente ha compilato la finestra obbligatoria del portale (citta',
+  // CAP, gruppi). null = non ancora, o utente che non usa il portale.
+  profile_completed_at: string | null;
   notes: string | null;
   referral_link: string | null;
   personal_contacts: string | null;
@@ -46,6 +51,59 @@ export interface UserSummaryResponse {
   active: number;
   inactive: number;
   suspended: number;
+  // Utenti attivi con meno canali social del richiesto (vedi
+  // ChannelRequirementResponse): alimenta il pulsante sopra la lista Utenti.
+  below_channel_requirement: number;
+}
+
+// --- Requisito canali social (services/channel_requirement_service.py) ---
+export interface ChannelRequirementChannel {
+  platform: string;
+  name: string;
+}
+
+export interface ChannelRequirementUser {
+  id: string;
+  name: string;
+  email: string;
+  company_name: string | null;
+  status: UserStatus;
+  has_portal_access: boolean;
+  connected_channels_count: number;
+  connected_channels: ChannelRequirementChannel[];
+  last_notified_at: string | null;
+  notifications_count: number;
+}
+
+export interface ChannelRequirementResponse {
+  required_channels: number;
+  cooldown_days: number;
+  email_enabled: boolean;
+  total: number;
+  without_channels: number;
+  never_notified: number;
+  users: ChannelRequirementUser[];
+}
+
+export interface ChannelRequirementNoticeResponse {
+  user_id: string;
+  email: string;
+  sent_at: string;
+  notifications_count: number;
+}
+
+export interface ChannelRequirementBulkRequest {
+  status_filter?: UserStatus | null;
+  // 0 = avvisa anche chi ha ricevuto il messaggio di recente.
+  skip_notified_within_days?: number | null;
+}
+
+export interface ChannelRequirementBulkResponse {
+  sent: number;
+  skipped_recent: number;
+  failed: number;
+  sent_user_ids: string[];
+  failed_user_ids: string[];
 }
 
 // Riusato per i conteggi di Campagne e Pubblicazioni (vedi
@@ -892,17 +950,53 @@ export interface OmniAIAgentConfigResponse {
   auto_generate_draft: boolean;
   response_mode: "MANUAL" | "APPROVAL_REQUIRED" | "AUTO_REPLY";
   sensitive_categories: string[] | null;
+  /** CRM Mamify: la chiave non viene mai restituita, solo se è impostata e da dove. */
+  crm_enabled: boolean;
+  crm_base_url: string | null;
+  crm_api_key_set: boolean;
+  crm_api_key_source: "config" | "env" | null;
 }
 
-export type OmniAIAgentConfigUpdate = Partial<Omit<OmniAIAgentConfigResponse, "id">>;
+export type OmniAIAgentConfigUpdate = Partial<Omit<OmniAIAgentConfigResponse, "id" | "crm_api_key_set" | "crm_api_key_source">> & {
+  /** Scrive la chiave (cifrata lato server); stringa vuota la rimuove; assente la lascia com'è. */
+  crm_api_key?: string;
+};
+
+export interface OmniCrmKeyCheckResponse {
+  status: "ok" | "invalid" | "no_permission" | "unavailable" | "error" | "not_configured";
+  message: string;
+}
+
+/** Cosa il CRM Mamify sa del contatto che scrive, per la scheda cliente. */
+export interface OmniCustomerCrmProfileResponse {
+  status: "identified" | "ambiguous" | "not_found" | "unverified" | "unavailable" | "disabled";
+  identity_source: "channel" | "operator" | null;
+  customer: Record<string, unknown> | null;
+  wallets: Record<string, unknown> | null;
+  candidates: number | null;
+  message: string | null;
+}
+
+export type OmniKnowledgeKind = "document" | "instruction";
 
 export interface OmniKnowledgeDocumentResponse {
   id: string;
   title: string;
-  source_type: "manual" | "faq" | "url" | "pdf" | "docx" | "txt";
+  source_type: string;
   content_text: string | null;
   source_url: string | null;
   status: string;
+  kind: OmniKnowledgeKind;
+  always_on: boolean;
+  company_id: string | null;
+  company: string | null;
+  file_name: string | null;
+  // Nell'elenco content_text e' null e c'e' solo l'inizio del testo; il testo
+  // intero arriva da getKnowledgeDocument().
+  preview: string | null;
+  chunk_count: number;
+  embedded_chunks: number;
+  error_message: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -912,6 +1006,71 @@ export interface OmniKnowledgeDocumentCreate {
   source_type?: string;
   content_text?: string;
   source_url?: string;
+  kind?: OmniKnowledgeKind;
+  always_on?: boolean;
+  // null = vale per tutte le aziende.
+  company_id?: string | null;
+}
+
+export type OmniKnowledgeDocumentUpdate = Partial<Omit<OmniKnowledgeDocumentCreate, "source_type" | "source_url">>;
+
+export interface OmniKnowledgeCompanyFields {
+  description?: string | null;
+  website?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  notes?: string | null;
+}
+
+export interface OmniKnowledgeCompanyCreate extends OmniKnowledgeCompanyFields {
+  name: string;
+}
+
+export type OmniKnowledgeCompanyUpdate = Partial<OmniKnowledgeCompanyCreate>;
+
+export interface OmniKnowledgeCompanyResponse extends OmniKnowledgeCompanyFields {
+  id: string;
+  name: string;
+  document_count: number;
+  instruction_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OmniKnowledgeListParams {
+  // id dell'azienda, "none" per i documenti senza azienda, assente per tutti.
+  company?: string;
+  q?: string;
+}
+
+export interface OmniKnowledgeStats {
+  documents: number;
+  instructions: number;
+  always_on_instructions: number;
+  chunks: number;
+  embedded_chunks: number;
+  companies: string[];
+}
+
+export interface OmniKnowledgeSearchHit {
+  document_id: string;
+  document_title: string;
+  company: string | null;
+  // "profile" = scheda azienda, generata dai dati dell'azienda.
+  kind: OmniKnowledgeKind | "profile";
+  content: string;
+  score: number;
+  similarity: number | null;
+  matched_by: string[];
+}
+
+export interface OmniKnowledgeSearchResponse {
+  hits: OmniKnowledgeSearchHit[];
+  warning: string | null;
+  reply: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
 }
 
 export interface OmniNotificationResponse {

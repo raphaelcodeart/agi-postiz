@@ -81,6 +81,16 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
               <span>{user.company_name || "—"}</span>
             </div>
             <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Città / CAP</span>
+              <span>{user.city || user.postal_code ? `${user.city ?? "—"} · ${user.postal_code ?? "—"}` : "—"}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Profilo portale</span>
+              <span title={user.profile_completed_at ? formatDateTime(user.profile_completed_at) : undefined}>
+                {user.profile_completed_at ? "Compilato" : "Non compilato"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
               <span className="text-muted-foreground">Creato</span>
               <span>{formatDateTime(user.created_at)}</span>
             </div>

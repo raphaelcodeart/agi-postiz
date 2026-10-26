@@ -91,7 +91,7 @@ class OmnichannelDraftService:
 
         draft.original_ai_text = result["text"]
         draft.model = result["model"]
-        draft.prompt_version = "v1"
+        draft.prompt_version = "v2-rag"
         draft.status = "HUMAN_REVIEW_REQUIRED" if sensitive_category else "PENDING_APPROVAL"
         draft.sensitive_category = sensitive_category
 
@@ -112,7 +112,14 @@ class OmnichannelDraftService:
                 db, owner_id, None, "ai_ready", "Bozza AI pronta per l'approvazione",
                 (draft.original_ai_text or "")[:200], "conversation", conversation.id,
             )
-        OmnichannelService.log_audit(db, owner_id, None, "AI_GENERATED", "ai_draft", draft.id, {"sensitive_category": sensitive_category, "auto_reply": should_auto_send})
+        OmnichannelService.log_audit(db, owner_id, None, "AI_GENERATED", "ai_draft", draft.id, {
+            "sensitive_category": sensitive_category, "auto_reply": should_auto_send,
+            "kb_sources": result.get("kb_sources") or [], "kb_warning": result.get("kb_warning"),
+            "cached_tokens": result.get("cached_tokens", 0),
+            # Cosa l'AI ha consultato nel CRM per questa bozza (stato
+            # identificazione + strumenti chiamati, nessun dato personale).
+            "crm": result.get("crm"),
+        })
 
         db.commit()
         db.refresh(draft)
@@ -161,6 +168,7 @@ class OmnichannelDraftService:
         draft.original_ai_text = result["text"]
         draft.edited_text = None
         draft.model = result["model"]
+        draft.prompt_version = "v2-rag"
         draft.status = "HUMAN_REVIEW_REQUIRED" if sensitive_category else "PENDING_APPROVAL"
         draft.sensitive_category = sensitive_category
         draft.failure_reason = None
@@ -170,7 +178,9 @@ class OmnichannelDraftService:
             input_tokens=result["input_tokens"], output_tokens=result["output_tokens"],
             estimated_cost=_estimate_cost(result["input_tokens"], result["output_tokens"]),
         ))
-        OmnichannelService.log_audit(db, draft.owner_id, admin.id, "AI_REGENERATED", "ai_draft", draft.id)
+        OmnichannelService.log_audit(db, draft.owner_id, admin.id, "AI_REGENERATED", "ai_draft", draft.id, {
+            "kb_sources": result.get("kb_sources") or [], "kb_warning": result.get("kb_warning"), "crm": result.get("crm"),
+        })
 
         db.commit()
         db.refresh(draft)

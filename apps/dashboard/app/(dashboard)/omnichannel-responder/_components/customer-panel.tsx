@@ -13,6 +13,7 @@ import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { useConversationDetail, useUpdateCustomer, useTags, useAddConversationTag, useRemoveConversationTag, useBlockCustomer, useUnblockCustomer } from "@/hooks/use-omnichannel";
 import { ApiError } from "@/lib/api/client";
 import { formatDateTime } from "@/lib/format";
+import { CustomerCrmCard } from "./customer-crm-card";
 
 export function CustomerPanel({ conversationId }: { conversationId: string | null }) {
   const { data: conversation, isLoading } = useConversationDetail(conversationId);
@@ -143,6 +144,8 @@ export function CustomerPanel({ conversationId }: { conversationId: string | nul
           )}
         </div>
       </div>
+
+      <CustomerCrmCard customerId={customer.id} channel={conversation.channel} />
 
       <div>
         <p className="mb-1.5 text-xs font-medium text-muted-foreground">Canali collegati</p>

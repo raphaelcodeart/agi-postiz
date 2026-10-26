@@ -4,6 +4,7 @@ import { LogOutIcon, UserIcon } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -34,10 +35,15 @@ export function UserMenu({ admin }: { admin: AdminResponse | undefined }) {
         </Avatar>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuLabel className="flex flex-col">
-          <span className="font-medium text-foreground">{admin?.full_name ?? "Amministratore"}</span>
-          <span className="font-normal text-xs text-muted-foreground">{admin?.email}</span>
-        </DropdownMenuLabel>
+        {/* Base UI: GroupLabel legge il contesto di Menu.Group e lancia
+            un'eccezione fuori da esso - senza questo wrapper il click
+            sull'avatar faceva scattare l'error boundary della pagina. */}
+        <DropdownMenuGroup>
+          <DropdownMenuLabel className="flex flex-col">
+            <span className="font-medium text-foreground">{admin?.full_name ?? "Amministratore"}</span>
+            <span className="font-normal text-xs text-muted-foreground">{admin?.email}</span>
+          </DropdownMenuLabel>
+        </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuItem
           variant="destructive"

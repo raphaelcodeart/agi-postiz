@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { ColumnDef } from "@tanstack/react-table";
-import { PlusIcon, PencilIcon, LinkIcon, IdCardIcon, UserRoundIcon, UsersIcon, UserCheckIcon, UserMinusIcon, BanIcon } from "lucide-react";
+import { PlusIcon, PencilIcon, LinkIcon, IdCardIcon, UserRoundIcon, UsersIcon, UserCheckIcon, UserMinusIcon, BanIcon, TriangleAlertIcon } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { DataTable } from "@/components/shared/data-table";
 import { SearchInput } from "@/components/shared/search-input";
@@ -144,10 +144,23 @@ export default function UsersPage() {
         title="Utenti"
         description="Gestisci i clienti della piattaforma e le loro appartenenze ai gruppi"
         actions={
-          <Button onClick={openCreate}>
-            <PlusIcon className="size-4" />
-            Nuovo utente
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" asChild>
+              <Link href="/users/channel-requirement">
+                <TriangleAlertIcon className="size-4" />
+                Canali insufficienti
+                {summary && summary.below_channel_requirement > 0 && (
+                  <Badge variant="destructive" className="ml-1">
+                    {summary.below_channel_requirement}
+                  </Badge>
+                )}
+              </Link>
+            </Button>
+            <Button onClick={openCreate}>
+              <PlusIcon className="size-4" />
+              Nuovo utente
+            </Button>
+          </div>
         }
       />
 

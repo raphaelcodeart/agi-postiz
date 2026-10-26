@@ -6,6 +6,8 @@ export const userFormSchema = z.object({
   name: z.string().min(1, "Il nome è obbligatorio").max(255),
   email: z.email({ message: "Inserisci un indirizzo email valido" }),
   company_name: z.string().max(255).optional().or(z.literal("")),
+  city: z.string().max(120).optional().or(z.literal("")),
+  postal_code: z.string().max(20).optional().or(z.literal("")),
   status: z.enum(userStatusValues),
   notes: z.string().max(1000).optional().or(z.literal("")),
   group_ids: z.array(z.string()).optional(),

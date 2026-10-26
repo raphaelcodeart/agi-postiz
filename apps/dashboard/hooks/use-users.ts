@@ -3,7 +3,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as usersService from "@/services/users";
 import { queryKeys } from "@/lib/query/keys";
-import type { ListUsersParams, UserPayload } from "@/services/users";
+import type { ChannelRequirementParams, ListUsersParams, UserPayload } from "@/services/users";
+import type { ChannelRequirementBulkRequest } from "@/types/api";
 
 export function useUsers(params: ListUsersParams = {}) {
   return useQuery({
@@ -95,5 +96,39 @@ export function useUpdateGroup() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.groups.list() });
     },
+  });
+}
+
+// --- Requisito canali social -------------------------------------------------
+
+export function useChannelRequirement(params: ChannelRequirementParams = {}) {
+  return useQuery({
+    queryKey: queryKeys.users.channelRequirement(params),
+    queryFn: () => usersService.getChannelRequirement(params),
+    placeholderData: (previousData) => previousData,
+  });
+}
+
+function useInvalidateChannelRequirement() {
+  const queryClient = useQueryClient();
+  return () => {
+    queryClient.invalidateQueries({ queryKey: ["users", "channel-requirement"] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.users.summary() });
+  };
+}
+
+export function useNotifyChannelRequirement() {
+  const invalidate = useInvalidateChannelRequirement();
+  return useMutation({
+    mutationFn: (userId: string) => usersService.notifyChannelRequirement(userId),
+    onSuccess: invalidate,
+  });
+}
+
+export function useNotifyAllChannelRequirement() {
+  const invalidate = useInvalidateChannelRequirement();
+  return useMutation({
+    mutationFn: (payload: ChannelRequirementBulkRequest) => usersService.notifyAllChannelRequirement(payload),
+    onSuccess: invalidate,
   });
 }

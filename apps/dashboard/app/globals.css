@@ -449,6 +449,11 @@
   border-left-color: var(--destructive);
   color: var(--destructive);
 }
+/* Esito positivo: il filo verde, ma il testo resta di lettura normale - un
+   messaggio di conferma non deve gridare quanto un errore. */
+.pa-notice--ok {
+  border-left-color: #1f9d55;
+}
 
 .pa-link {
   color: var(--pa-accent);

@@ -11,6 +11,9 @@ import { PortalAuthShell } from "../auth-shell";
 function PortalLoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  // Arriva da /portal/reset-password: la password e' appena stata cambiata e
+  // questo e' il primo accesso con quella nuova.
+  const justReset = searchParams.get("reset") === "1";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +45,11 @@ function PortalLoginForm() {
 
   return (
     <form onSubmit={onSubmit} className="grid gap-4">
+      {justReset && !error && (
+        <p className="pa-notice pa-notice--ok">
+          Password aggiornata. Accedi con quella nuova.
+        </p>
+      )}
       {error && (
         <p role="alert" className="pa-notice pa-notice--error">
           {error}
@@ -59,7 +67,15 @@ function PortalLoginForm() {
         />
       </div>
       <div className="grid gap-1.5">
-        <Label htmlFor="password">Password</Label>
+        <div className="flex items-baseline justify-between gap-3">
+          <Label htmlFor="password">Password</Label>
+          <Link
+            href="/portal/forgot-password"
+            className="text-[0.82rem] text-[var(--pa-muted)] hover:text-[var(--pa-accent)]"
+          >
+            Hai dimenticato la password?
+          </Link>
+        </div>
         <Input
           id="password"
           type="password"

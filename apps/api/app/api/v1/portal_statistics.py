@@ -22,7 +22,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.v1.portal import get_current_portal_user
+from app.api.v1.portal import get_verified_portal_user
 from app.db.session import get_db
 from app.models.statistics import StatSyncRun
 from app.models.user import User
@@ -58,7 +58,7 @@ def _safe_filename(stem: str) -> str:
 @router.get("/statistics", response_model=StatUserDetailResponse)
 def get_my_statistics(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """
     Totali del promoter, i suoi canali con i mini-totali per riga e le due serie
@@ -80,7 +80,7 @@ def get_my_statistics(
 def get_my_channel_statistics(
     channel_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """
     Un canale del promoter e i suoi post, uno per riga con le metriche.
@@ -102,7 +102,7 @@ def get_my_channel_statistics(
 @router.post("/statistics/sync", response_model=StatSyncDispatchResponse, status_code=status.HTTP_202_ACCEPTED)
 def sync_my_statistics(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """
     Aggiorna le statistiche dei propri post.
@@ -156,7 +156,7 @@ def sync_my_statistics(
 def get_my_sync_run(
     sync_run_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """Progresso di un aggiornamento, per il polling del bottone. Il filtro su
     ``scope_user_id`` e' il controllo di accesso: il run di un altro promoter
@@ -180,7 +180,7 @@ def get_my_sync_run(
 @router.get("/statistics/export.xlsx")
 def export_my_statistics_xlsx(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """Un foglio con una riga per canale - la controparte per il promoter di
     ``/statistics/export/users/{id}.xlsx``."""
@@ -208,7 +208,7 @@ def export_my_statistics_xlsx(
 def export_my_channel_xlsx(
     channel_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """Un foglio con una riga per post di quel canale."""
     data = statistics_service.build_channel_detail(db, current_user.id, channel_id)

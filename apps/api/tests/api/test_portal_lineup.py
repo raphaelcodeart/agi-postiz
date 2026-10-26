@@ -24,7 +24,13 @@ def _now():
 @pytest.fixture()
 def promoters(db):
     def make(nome, email, platforms):
-        user = User(name=nome, email=email, status="active", password_hash="x")
+        # email_verified_at e privacy_accepted_at valorizzati: questi sono promoter che il portale lo
+        # stanno gia' usando. Senza, ogni rotta risponderebbe 403 - vedi
+        # get_verified_portal_user in app/api/v1/portal.py.
+        user = User(
+            name=nome, email=email, status="active", password_hash="x",
+            email_verified_at=_now(), privacy_accepted_at=_now(), profile_completed_at=_now(),
+        )
         db.add(user)
         db.flush()
         connection = BufferConnection(

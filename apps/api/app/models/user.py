@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, List
-from sqlalchemy import String, DateTime, Table, ForeignKey, Column
+from sqlalchemy import Boolean, String, DateTime, Table, ForeignKey, Column, false
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.session import Base
@@ -40,6 +40,41 @@ class User(Base):
     # presence in one visible and refusable. See services/user_activation.py;
     # PlatformSettings.auto_activate_new_users restores the old behaviour.
     self_registered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # --- Conferma dell'indirizzo e consenso ---
+    # NULL finche' l'utente non ha cliccato il link dell'email di benvenuto. Il
+    # portale non lo lascia entrare prima (vedi la guardia in
+    # apps/dashboard/app/portal/(app)/layout.tsx): senza un indirizzo che
+    # funziona non potremmo ne' resettare la sua password ne' avvisarlo di una
+    # campagna, e l'account sarebbe irrecuperabile al primo problema.
+    #
+    # Resta NULL anche per chi era iscritto prima che la conferma esistesse: la
+    # migrazione non la retrodata, perche' insieme all'indirizzo si accettano
+    # informativa e termini, che quando si sono iscritti non c'erano. Vedi
+    # ``verification_retroactive`` qui sotto.
+    email_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Quando ha accettato informativa privacy e termini. Lo stesso clic
+    # sull'email di benvenuto vale per entrambe le cose - l'email lo dice
+    # esplicitamente e linka i due documenti prima del pulsante - percio' questa
+    # colonna e quella sopra si valorizzano insieme. Restano due colonne perche'
+    # sono due fatti diversi: un domani l'informativa cambia e va riaccettata
+    # senza riconfermare l'indirizzo.
+    privacy_accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Vero per chi era iscritto prima dell'introduzione di conferma e consenso.
+    # Non cambia cosa deve fare - lo stesso clic sull'email - ma cambia cosa gli
+    # si dice: non e' un nuovo arrivato da accogliere, e' un utente di sempre a
+    # cui si chiede di accettare documenti che prima non esistevano.
+    verification_retroactive: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    # --- Profilo richiesto al primo accesso al portale ---
+    # Citta', CAP e gruppi di partecipazione: il portale li chiede con una
+    # finestra obbligatoria al primo accesso (vedi get_verified_portal_user in
+    # api/v1/portal.py) e non apre nulla finche' profile_completed_at e' NULL.
+    # I gruppi scelti finiscono in User.groups, gli stessi che usa il targeting
+    # delle campagne: l'utente si trova gia' dentro i gruppi che ha scelto.
+    city: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    postal_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    profile_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     # Personal referral/promoter link, pasted verbatim into a campaign's resolved
     # text when Campaign.include_referral_link is on (see campaign_resolver.py).
@@ -70,6 +105,12 @@ class User(Base):
     )
     publications: Mapped[List["Publication"]] = relationship(
         "Publication", back_populates="user", cascade="all, delete-orphan"
+    )
+    auth_tokens: Mapped[List["UserAuthToken"]] = relationship(
+        "UserAuthToken", back_populates="user", cascade="all, delete-orphan"
+    )
+    notifications: Mapped[List["UserNotification"]] = relationship(
+        "UserNotification", back_populates="user", cascade="all, delete-orphan"
     )
 
 

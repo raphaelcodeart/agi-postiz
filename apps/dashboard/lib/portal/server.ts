@@ -22,8 +22,37 @@ export type PortalUser = {
   company_name: string | null;
   status: string;
   is_active_for_campaigns: boolean;
+  /**
+   * Falso finche' l'utente non ha cliccato il link dell'email di benvenuto. Il
+   * layout del gruppo (app) si ferma qui e mostra la finestra di attesa; l'API
+   * fa lo stesso un gradino sotto, vedi get_verified_portal_user.
+   */
+  email_verified: boolean;
+  privacy_accepted: boolean;
+  /**
+   * Se gli e' gia' partita un'email di conferma. Falso per chi era iscritto
+   * prima della conferma: la finestra di attesa gli propone l'invio invece di
+   * dirgli di controllare una posta in cui non c'e' niente.
+   */
+  verification_email_sent: boolean;
+  city: string | null;
+  postal_code: string | null;
+  /**
+   * Falso finche' l'utente non ha compilato la finestra obbligatoria del primo
+   * accesso (citta', CAP, gruppi). Il layout si ferma qui subito dopo la
+   * conferma dell'indirizzo; l'API fa lo stesso in get_verified_portal_user.
+   */
+  profile_completed: boolean;
+  group_ids: string[];
   referral_link: string | null;
   created_at: string;
+};
+
+/** Un gruppo di partecipazione, da scegliere nella finestra del primo accesso. */
+export type PortalGroup = {
+  id: string;
+  name: string;
+  description: string | null;
 };
 
 export type PortalChannel = {

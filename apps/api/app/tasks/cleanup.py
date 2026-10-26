@@ -130,3 +130,26 @@ def media_retention_cleanup() -> None:
         db.rollback()
     finally:
         db.close()
+
+
+@celery.task(name="app.tasks.cleanup.purge_expired_auth_tokens")
+def purge_expired_auth_tokens() -> None:
+    """
+    Toglie i token di conferma e reset ormai spenti (services/auth_tokens.py).
+
+    La tabella cresce di una riga a ogni registrazione e a ogni password
+    dimenticata: senza questa passata resterebbe li' a gonfiarsi per sempre con
+    righe che non rispondono piu' a nessuna domanda.
+    """
+    from app.services import auth_tokens
+
+    db = SessionLocal()
+    try:
+        removed = auth_tokens.purge_expired(db)
+        db.commit()
+        logger.info("Purged %s expired auth tokens.", removed)
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Auth token purge failed: {e}")
+    finally:
+        db.close()

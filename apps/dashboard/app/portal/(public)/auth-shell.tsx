@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { BrandMark, portalFont } from "../_shared/brand";
+import { PortalLegalFooter } from "../_shared/legal";
 
 /**
  * Guscio condiviso da /portal/login e /portal/register.
@@ -53,6 +54,13 @@ export function PortalAuthShell({
         <p className="mt-7 text-center text-[0.82rem] text-[var(--pa-muted)]">
           Niente siti web, niente pacchetti: AGI Post fa una cosa sola, e la fa sui social.
         </p>
+
+        {/* Gli stessi documenti del footer di mamify.ai: il portale non ha
+            condizioni proprie. Su una schermata che chiede una password devono
+            essere raggiungibili senza cercarli. */}
+        <div className="mt-5">
+          <PortalLegalFooter compact />
+        </div>
       </main>
     </div>
   );

@@ -28,6 +28,7 @@ celery.conf.imports = (
     "app.tasks.blog_writer",
     "app.tasks.omnichannel",
     "app.tasks.statistics",
+    "app.tasks.email",
 )
 
 # Celery Beat Periodic Scheduling Config
@@ -52,8 +53,16 @@ celery.conf.beat_schedule = {
         "task": "app.tasks.publication.poll_and_queue_scheduled_publications",
         "schedule": 30.0, # Every 30 seconds
     },
+    "purge-expired-auth-tokens-daily": {
+        "task": "app.tasks.cleanup.purge_expired_auth_tokens",
+        "schedule": crontab(hour=3, minute=10), # Daily, offset from the media cleanup above
+    },
     "poll-gmail-channels-every-2m": {
         "task": "app.tasks.omnichannel.poll_gmail_channels_task",
         "schedule": 120.0, # Every 2 minutes - Gmail has no inbound webhook, see connectors/gmail.py
+    },
+    "embed-pending-knowledge-chunks-every-10m": {
+        "task": "app.tasks.omnichannel.embed_pending_knowledge_task",
+        "schedule": 600.0, # Every 10 minutes - no OpenAI call when nothing is pending
     }
 }

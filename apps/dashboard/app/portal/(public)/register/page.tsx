@@ -7,6 +7,7 @@ import { Loader2Icon } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PortalAuthShell } from "../auth-shell";
+import { PRIVACY_URL, TERMS_URL } from "../../_shared/legal";
 
 const MIN_PASSWORD_LENGTH = 10; // matches PortalRegisterRequest in apps/api/app/api/v1/portal.py
 
@@ -110,6 +111,20 @@ export default function PortalRegisterPage() {
           {pending && <Loader2Icon className="size-4 animate-spin" />}
           Crea il mio account
         </button>
+        {/* Detto prima del clic, non dopo: chi si registra deve sapere che
+            l'email arrivera' e che senza quel passaggio non entra. */}
+        <p className="text-center text-[0.79rem] leading-relaxed text-[var(--pa-muted)]">
+          Ti manderemo un&apos;email per confermare l&apos;indirizzo: il link vale anche come
+          accettazione della{" "}
+          <a href={PRIVACY_URL} className="pa-link" target="_blank" rel="noreferrer">
+            privacy
+          </a>{" "}
+          e dei{" "}
+          <a href={TERMS_URL} className="pa-link" target="_blank" rel="noreferrer">
+            termini e condizioni
+          </a>
+          .
+        </p>
       </form>
     </PortalAuthShell>
   );

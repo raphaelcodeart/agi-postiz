@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { SendIcon, StickyNoteIcon, CheckCircle2Icon, ArchiveIcon, SparklesIcon, Trash2Icon, WandIcon } from "lucide-react";
@@ -29,6 +29,21 @@ export function ChatPanel({ conversationId, onDeleted }: { conversationId: strin
   const deleteConversation = useDeleteConversation();
   const generateDraft = useGenerateDraft(conversationId ?? "");
 
+  const activeDraft = conversation ? [...conversation.drafts].reverse().find((d) => !["SENT", "REJECTED"].includes(d.status)) : undefined;
+  const lastMessage = conversation?.messages[conversation.messages.length - 1];
+
+  // Opening a conversation (or receiving a new message / AI draft / note while
+  // it's open) lands the thread on its latest content, where the operator
+  // reads the customer's last message and replies - instead of at the top of
+  // the history, forcing a manual scroll every time. The polled refetch
+  // (every 4s) leaves these deps untouched when nothing changed, so it never
+  // yanks the view while the operator is reading older messages.
+  const threadRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = threadRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [conversation?.id, lastMessage?.id, activeDraft?.id, conversation?.notes.length]);
+
   if (!conversationId) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -47,8 +62,6 @@ export function ChatPanel({ conversationId, onDeleted }: { conversationId: strin
     );
   }
 
-  const activeDraft = [...conversation.drafts].reverse().find((d) => !["SENT", "REJECTED"].includes(d.status));
-  const lastMessage = conversation.messages[conversation.messages.length - 1];
   // Only offered when there's genuinely nothing to review yet and the ball
   // is in our court (customer wrote last) - covers OmniAIAgentConfig.
   // auto_generate_draft=False (no automatic generation happened) as well as
@@ -125,7 +138,7 @@ export function ChatPanel({ conversationId, onDeleted }: { conversationId: strin
         }}
       />
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+      <div ref={threadRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
         {conversation.messages.length === 0 && (
           <p className="py-8 text-center text-sm text-muted-foreground">Nessun messaggio in questa conversazione.</p>
         )}

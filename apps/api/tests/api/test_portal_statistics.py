@@ -36,7 +36,15 @@ def promoters(db):
     db.flush()
 
     def make(name, email, platform, views, likes):
-        user = User(name=name, email=email, status="active", password_hash="x")
+        # email_verified_at e privacy_accepted_at valorizzati: questi sono promoter che il portale lo
+        # stanno gia' usando. Senza, ogni rotta risponderebbe 403 - vedi
+        # get_verified_portal_user in app/api/v1/portal.py.
+        user = User(
+            name=name, email=email, status="active", password_hash="x",
+            email_verified_at=datetime.now(timezone.utc),
+            privacy_accepted_at=datetime.now(timezone.utc),
+            profile_completed_at=datetime.now(timezone.utc),
+        )
         db.add(user)
         db.flush()
         connection = BufferConnection(

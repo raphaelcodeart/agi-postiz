@@ -14,10 +14,10 @@ can't send a JWT) and has its own verification story.
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import func, insert, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, defer, joinedload
 from app.db.session import get_db
 from app.api.v1.auth import get_current_admin
 from app.models.administrator import Administrator
@@ -27,6 +27,7 @@ from app.models.omnichannel import (
     OmniConversation,
     OmniCustomer,
     OmniKnowledgeChunk,
+    OmniKnowledgeCompany,
     OmniKnowledgeDocument,
     OmniMessage,
     OmniNotification,
@@ -37,6 +38,12 @@ from app.integrations.omnichannel.connectors.maytapi import MaytapiConnector
 from app.integrations.omnichannel.connectors.registry import get_connector, SUPPORTED_CHANNELS
 from app.integrations.omnichannel.connectors.telegram import TelegramConnector
 from app.integrations.omnichannel.exceptions import ConnectorError
+from app.integrations.omnichannel import ai as omni_ai
+from app.integrations.omnichannel import knowledge
+from app.integrations.omnichannel.crm import tools as crm_tools
+from app.integrations.omnichannel.crm.mamify import MamifyError, MamifyRagClient
+from app.core.security import EncryptionService
+from app.services.ai_settings_service import get_openai_credentials
 from app.services.omnichannel_service import OmnichannelService
 from app.services.omnichannel_draft_service import OmnichannelDraftService
 from app.core.config import settings
@@ -58,13 +65,24 @@ from app.schemas.schemas import (
     OmniAIDraftEditRequest,
     OmniAIAgentConfigResponse,
     OmniAIAgentConfigUpdate,
+    OmniKnowledgeCompanyCreate,
+    OmniKnowledgeCompanyResponse,
+    OmniKnowledgeCompanyUpdate,
     OmniKnowledgeDocumentCreate,
+    OmniKnowledgeDocumentMove,
     OmniKnowledgeDocumentResponse,
+    OmniKnowledgeDocumentUpdate,
+    OmniKnowledgeSearchRequest,
+    OmniKnowledgeSearchResponse,
+    OmniKnowledgeSearchHit,
+    OmniKnowledgeStatsResponse,
     OmniTagCreate,
     OmniTagResponse,
     OmniInternalNoteCreate,
     OmniInternalNoteResponse,
     OmniNotificationResponse,
+    OmniCrmKeyCheckResponse,
+    OmniCustomerCrmProfileResponse,
 )
 
 router = APIRouter()
@@ -600,6 +618,51 @@ def get_customer(customer_id: uuid.UUID, db: Session = Depends(get_db), admin: A
     return customer
 
 
+@router.get("/customers/{customer_id}/crm-profile", response_model=OmniCustomerCrmProfileResponse)
+def get_customer_crm_profile(
+    customer_id: uuid.UUID, channel: Optional[str] = None,
+    db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin),
+):
+    """
+    Scheda CRM del contatto per l'operatore: identificazione (con la stessa
+    regola di fiducia dell'AI, crm/tools.py) piu' anagrafica e saldi. Lettura
+    a richiesta, mai in lista: ogni apertura e' una chiamata al CRM e finisce
+    nell'audit.
+    """
+    customer = db.query(OmniCustomer).filter(OmniCustomer.id == customer_id, OmniCustomer.owner_id == admin.id).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente non trovato")
+    config = OmnichannelService.get_or_create_ai_agent_config(db, admin.id)
+    client = crm_tools.client_for(config)
+    if client is None:
+        return OmniCustomerCrmProfileResponse(status="disabled", message="Integrazione CRM non attiva (pagina AI Agent).")
+
+    ctx = crm_tools.prepare(client, customer, channel)
+    wallets = None
+    if ctx.customer_tools_enabled:
+        try:
+            wallets = client.wallets(customer_id=ctx.customer_id)
+            ctx.lookups.append({"tool": "customer/wallets", "ok": True})
+        except MamifyError as e:
+            ctx.lookups.append({"tool": "customer/wallets", "ok": False, "error": e.code})
+
+    OmnichannelService.log_audit(db, admin.id, admin.id, "CRM_PROFILE_VIEWED", "customer", customer.id, ctx.summary())
+    db.commit()
+
+    messages = {
+        "identified": None,
+        "ambiguous": "Il numero corrisponde a più account nel CRM: l'AI chiederà l'email al cliente per distinguerli.",
+        "not_found": "Nessun account Mamify con questo numero: l'AI non fornirà dati di account.",
+        "unverified": "Nessuna identità verificabile su questo canale. Inserisci telefono o email nella scheda per collegarlo al CRM.",
+        "unavailable": "CRM non raggiungibile o chiave rifiutata.",
+    }
+    return OmniCustomerCrmProfileResponse(
+        status=ctx.status, identity_source=ctx.identity.source if ctx.identity else None,
+        customer=ctx.customer, wallets=wallets, candidates=ctx.candidates_count or None,
+        message=messages.get(ctx.status),
+    )
+
+
 @router.patch("/customers/{customer_id}", response_model=OmniCustomerResponse)
 def update_customer(customer_id: uuid.UUID, payload: OmniCustomerUpdate, db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
     customer = db.query(OmniCustomer).filter(OmniCustomer.id == customer_id, OmniCustomer.owner_id == admin.id).first()
@@ -692,6 +755,14 @@ def regenerate_draft(draft_id: uuid.UUID, db: Session = Depends(get_db), admin: 
         return OmnichannelDraftService.regenerate(db, draft, admin)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except ConnectorError as e:
+        # Unlike the first generation, which records the failure on the draft
+        # itself (generate_draft_for_message marks it FAILED with a
+        # failure_reason the inbox displays), regenerate() has an existing
+        # draft to preserve and lets the error out. Without this it surfaced
+        # as a bare 500 "Internal Server Error" and the real cause - an
+        # exhausted OpenAI balance, on 2026-09-22 - never reached the screen.
+        raise HTTPException(status_code=502, detail=e.message)
 
 
 @router.post("/drafts/{draft_id}/reject", response_model=OmniAIDraftResponse)
@@ -706,9 +777,19 @@ def reject_draft(draft_id: uuid.UUID, db: Session = Depends(get_db), admin: Admi
 # ==============================================================================
 # AI Agent configuration
 # ==============================================================================
+def _agent_config_response(config) -> OmniAIAgentConfigResponse:
+    """La chiave CRM non lascia mai il server: si dice solo se c'e' e da dove viene."""
+    response = OmniAIAgentConfigResponse.model_validate(config)
+    if config.crm_api_key_encrypted:
+        response.crm_api_key_set, response.crm_api_key_source = True, "config"
+    elif settings.MAMIFY_RAG_API_KEY:
+        response.crm_api_key_set, response.crm_api_key_source = True, "env"
+    return response
+
+
 @router.get("/ai-agent", response_model=OmniAIAgentConfigResponse)
 def get_ai_agent_config(db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
-    return OmnichannelService.get_or_create_ai_agent_config(db, admin.id)
+    return _agent_config_response(OmnichannelService.get_or_create_ai_agent_config(db, admin.id))
 
 
 @router.put("/ai-agent", response_model=OmniAIAgentConfigResponse)
@@ -718,6 +799,26 @@ def update_ai_agent_config(payload: OmniAIAgentConfigUpdate, db: Session = Depen
 
     if "response_mode" in updates and updates["response_mode"] not in ("MANUAL", "APPROVAL_REQUIRED", "AUTO_REPLY"):
         raise HTTPException(status_code=400, detail=f"response_mode non valido: {updates['response_mode']}")
+
+    # La chiave CRM si cifra e si registra come evento a parte: e' una
+    # credenziale verso dati personali di terzi, non un'impostazione di tono.
+    if "crm_api_key" in updates:
+        raw_key = (updates.pop("crm_api_key") or "").strip()
+        config.crm_api_key_encrypted = EncryptionService.encrypt(raw_key) if raw_key else None
+        OmnichannelService.log_audit(
+            db, admin.id, admin.id, "CRM_KEY_CHANGED", "ai_agent_config", config.id, {"set": bool(raw_key)},
+        )
+    if "crm_base_url" in updates:
+        base_url = (updates["crm_base_url"] or "").strip()
+        if base_url and not base_url.startswith("https://"):
+            raise HTTPException(status_code=400, detail="L'indirizzo del CRM deve iniziare con https://")
+        updates["crm_base_url"] = base_url or None
+    if updates.get("crm_enabled") and not (config.crm_api_key_encrypted or settings.MAMIFY_RAG_API_KEY):
+        raise HTTPException(status_code=400, detail="Per attivare il CRM serve prima una chiave API Mamify")
+    if "crm_enabled" in updates and updates["crm_enabled"] != config.crm_enabled:
+        OmnichannelService.log_audit(
+            db, admin.id, admin.id, "CRM_TOGGLED", "ai_agent_config", config.id, {"enabled": updates["crm_enabled"]},
+        )
 
     previous_response_mode = config.response_mode
     field_map = {"allowed_topics": "allowed_topics_json", "forbidden_topics": "forbidden_topics_json", "sensitive_categories": "sensitive_categories_json"}
@@ -736,63 +837,422 @@ def update_ai_agent_config(payload: OmniAIAgentConfigUpdate, db: Session = Depen
     OmnichannelService.log_audit(db, admin.id, admin.id, "SETTINGS_CHANGED", "ai_agent_config", config.id)
     db.commit()
     db.refresh(config)
-    return config
+    return _agent_config_response(config)
+
+
+@router.post("/ai-agent/crm/check", response_model=OmniCrmKeyCheckResponse)
+def check_crm_key(db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
+    """
+    Prova la chiave CRM salvata senza leggere dati di nessuno (vedi
+    MamifyRagClient.check_key). Non richiede crm_enabled: serve proprio a
+    decidere se accenderlo.
+    """
+    config = OmnichannelService.get_or_create_ai_agent_config(db, admin.id)
+    api_key = crm_tools.resolve_api_key(config)
+    if not api_key:
+        return OmniCrmKeyCheckResponse(status="not_configured", message="Nessuna chiave API Mamify impostata.")
+    client = MamifyRagClient(api_key, config.crm_base_url or None)
+    return OmniCrmKeyCheckResponse(**client.check_key())
 
 
 # ==============================================================================
-# Knowledge base (keyword-search RAG - see integrations/omnichannel/ai.py)
+# Knowledge base - RAG ibrido, vedi integrations/omnichannel/knowledge.py
 # ==============================================================================
-def _chunk_text(text: str, max_len: int = 500) -> List[str]:
-    paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
-    chunks: List[str] = []
-    for paragraph in paragraphs:
-        while len(paragraph) > max_len:
-            cut = paragraph.rfind(" ", 0, max_len)
-            cut = cut if cut > 0 else max_len
-            chunks.append(paragraph[:cut].strip())
-            paragraph = paragraph[cut:].strip()
-        if paragraph:
-            chunks.append(paragraph)
-    return chunks
+def _owned_document(db: Session, admin: Administrator, document_id: uuid.UUID) -> OmniKnowledgeDocument:
+    document = db.query(OmniKnowledgeDocument).filter(
+        OmniKnowledgeDocument.id == document_id, OmniKnowledgeDocument.owner_id == admin.id, OmniKnowledgeDocument.kind != "profile",
+    ).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Documento non trovato")
+    return document
+
+
+def _owned_company(db: Session, admin: Administrator, company_id: Optional[uuid.UUID]) -> Optional[OmniKnowledgeCompany]:
+    if company_id is None:
+        return None
+    company = db.query(OmniKnowledgeCompany).filter(OmniKnowledgeCompany.id == company_id, OmniKnowledgeCompany.owner_id == admin.id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Azienda non trovata")
+    return company
+
+
+def _document_response(document: OmniKnowledgeDocument, embedded: int) -> OmniKnowledgeDocumentResponse:
+    response = OmniKnowledgeDocumentResponse.model_validate(document)
+    response.embedded_chunks = embedded
+    return response
+
+
+def _embedded_counts(db: Session, owner_id: uuid.UUID, document_ids: Optional[List[uuid.UUID]] = None) -> Dict[uuid.UUID, int]:
+    query = (
+        db.query(OmniKnowledgeChunk.document_id, func.count(OmniKnowledgeChunk.id))
+        .filter(OmniKnowledgeChunk.owner_id == owner_id, OmniKnowledgeChunk.embedding.isnot(None))
+    )
+    if document_ids is not None:
+        query = query.filter(OmniKnowledgeChunk.document_id.in_(document_ids))
+    return dict(query.group_by(OmniKnowledgeChunk.document_id).all())
+
+
+def _queue_embedding(document_id: Optional[uuid.UUID]) -> None:
+    """
+    Gli embedding si calcolano nel worker: il salvataggio non aspetta OpenAI e
+    la ricerca testuale funziona subito. Senza document_id recupera tutti i
+    blocchi in attesa (dopo un cambio che tocca molti documenti insieme).
+    """
+    from app.tasks.omnichannel import embed_knowledge_document_task, embed_pending_knowledge_task
+    if document_id is None:
+        embed_pending_knowledge_task.delay()
+    else:
+        embed_knowledge_document_task.delay(str(document_id))
+
+
+def _save_document(db: Session, admin: Administrator, document: OmniKnowledgeDocument, action: str) -> OmniKnowledgeDocumentResponse:
+    if document.kind != "instruction":
+        document.always_on = False
+    document.error_message = None
+    knowledge.rebuild_chunks(db, document)
+    if not document.chunk_count:
+        raise HTTPException(status_code=422, detail="Il contenuto e' vuoto")
+    document.status = "ready"
+    OmnichannelService.log_audit(db, admin.id, admin.id, "SETTINGS_CHANGED", "knowledge_document", document.id, {"action": action, "kind": document.kind})
+    db.commit()
+    db.refresh(document)
+    _queue_embedding(document.id)
+    return _document_response(document, 0)
+
+
+def _rechunk_documents(db: Session, documents: List[OmniKnowledgeDocument]) -> None:
+    """Il nome dell'azienda sta nell'intestazione dei blocchi: cambiarlo (o spostare il documento) richiede blocchi nuovi."""
+    for document in documents:
+        knowledge.rebuild_chunks(db, document)
+        document.updated_at = datetime.now(timezone.utc)
+
+
+PREVIEW_CHARS = 300
 
 
 @router.get("/knowledge-base", response_model=List[OmniKnowledgeDocumentResponse])
-def list_knowledge_documents(db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
-    return db.query(OmniKnowledgeDocument).filter(OmniKnowledgeDocument.owner_id == admin.id).order_by(OmniKnowledgeDocument.created_at.desc()).all()
+def list_knowledge_documents(
+    company: Optional[str] = Query(None, description="id dell'azienda, oppure 'none' per i documenti senza azienda"),
+    kind: Optional[str] = Query(None, pattern="^(document|instruction)$"),
+    q: Optional[str] = Query(None, max_length=200),
+    db: Session = Depends(get_db),
+    admin: Administrator = Depends(get_current_admin),
+):
+    # Il testo intero resta nel database: all'elenco basta l'inizio.
+    query = (
+        db.query(OmniKnowledgeDocument, func.left(OmniKnowledgeDocument.content_text, PREVIEW_CHARS))
+        .options(defer(OmniKnowledgeDocument.content_text))
+        .filter(OmniKnowledgeDocument.owner_id == admin.id, OmniKnowledgeDocument.kind != "profile")
+    )
+    if company == "none":
+        query = query.filter(OmniKnowledgeDocument.company_id.is_(None))
+    elif company:
+        try:
+            query = query.filter(OmniKnowledgeDocument.company_id == uuid.UUID(company))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Azienda non valida")
+    if kind:
+        query = query.filter(OmniKnowledgeDocument.kind == kind)
+    if q and q.strip():
+        needle = f"%{q.strip().replace('%', '').replace('_', ' ')}%"
+        query = query.filter(or_(
+            OmniKnowledgeDocument.title.ilike(needle),
+            OmniKnowledgeDocument.file_name.ilike(needle),
+            OmniKnowledgeDocument.content_text.ilike(needle),
+        ))
+    rows = query.order_by(OmniKnowledgeDocument.created_at.desc()).all()
+    embedded = _embedded_counts(db, admin.id, [doc.id for doc, _ in rows])
+    return [
+        OmniKnowledgeDocumentResponse(
+            id=doc.id, title=doc.title, source_type=doc.source_type, content_text=None, preview=preview,
+            source_url=doc.source_url, status=doc.status, kind=doc.kind, always_on=doc.always_on,
+            company_id=doc.company_id, company=doc.company, file_name=doc.file_name, chunk_count=doc.chunk_count,
+            embedded_chunks=embedded.get(doc.id, 0), error_message=doc.error_message,
+            created_at=doc.created_at, updated_at=doc.updated_at,
+        )
+        for doc, preview in rows
+    ]
 
 
+@router.get("/knowledge-base/stats", response_model=OmniKnowledgeStatsResponse)
+def knowledge_stats(db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
+    counts = dict(
+        db.query(OmniKnowledgeDocument.kind, func.count(OmniKnowledgeDocument.id))
+        .filter(OmniKnowledgeDocument.owner_id == admin.id)
+        .group_by(OmniKnowledgeDocument.kind)
+        .all()
+    )
+    always_on = db.query(func.count(OmniKnowledgeDocument.id)).filter(
+        OmniKnowledgeDocument.owner_id == admin.id, OmniKnowledgeDocument.kind == "instruction", OmniKnowledgeDocument.always_on.is_(True),
+    ).scalar() or 0
+    chunks = db.query(func.count(OmniKnowledgeChunk.id)).filter(OmniKnowledgeChunk.owner_id == admin.id).scalar() or 0
+    embedded = db.query(func.count(OmniKnowledgeChunk.id)).filter(OmniKnowledgeChunk.owner_id == admin.id, OmniKnowledgeChunk.embedding.isnot(None)).scalar() or 0
+    companies = db.query(OmniKnowledgeCompany.name).filter(OmniKnowledgeCompany.owner_id == admin.id).all()
+    return OmniKnowledgeStatsResponse(
+        documents=counts.get("document", 0), instructions=counts.get("instruction", 0), always_on_instructions=always_on,
+        chunks=chunks, embedded_chunks=embedded,
+        companies=sorted((name for (name,) in companies), key=str.lower),
+    )
+
+
+# --- Aziende: le cartelle della Knowledge Base --------------------------------
+def _company_response(company: OmniKnowledgeCompany, counts: Dict[tuple, int]) -> OmniKnowledgeCompanyResponse:
+    response = OmniKnowledgeCompanyResponse.model_validate(company)
+    response.document_count = counts.get((company.id, "document"), 0)
+    response.instruction_count = counts.get((company.id, "instruction"), 0)
+    return response
+
+
+def _company_counts(db: Session, owner_id: uuid.UUID) -> Dict[tuple, int]:
+    rows = (
+        db.query(OmniKnowledgeDocument.company_id, OmniKnowledgeDocument.kind, func.count(OmniKnowledgeDocument.id))
+        .filter(OmniKnowledgeDocument.owner_id == owner_id, OmniKnowledgeDocument.company_id.isnot(None))
+        .group_by(OmniKnowledgeDocument.company_id, OmniKnowledgeDocument.kind)
+        .all()
+    )
+    return {(company_id, kind): count for company_id, kind, count in rows}
+
+
+def _clean_company_fields(values: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: ((value.strip() or None) if isinstance(value, str) else value) for key, value in values.items()}
+
+
+def _check_company_name(db: Session, admin: Administrator, name: str, exclude_id: Optional[uuid.UUID] = None) -> str:
+    name = name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Il nome dell'azienda e' obbligatorio")
+    query = db.query(OmniKnowledgeCompany.id).filter(
+        OmniKnowledgeCompany.owner_id == admin.id, func.lower(OmniKnowledgeCompany.name) == name.lower(),
+    )
+    if exclude_id:
+        query = query.filter(OmniKnowledgeCompany.id != exclude_id)
+    if query.first():
+        raise HTTPException(status_code=409, detail=f"Esiste gia' un'azienda chiamata \"{name}\"")
+    return name
+
+
+def _commit_company(db: Session, admin: Administrator, company: OmniKnowledgeCompany, action: str, rechunked: bool) -> OmniKnowledgeCompanyResponse:
+    profile = knowledge.sync_company_profile(db, company)
+    OmnichannelService.log_audit(db, admin.id, admin.id, "SETTINGS_CHANGED", "knowledge_company", company.id, {"action": action})
+    db.commit()
+    db.refresh(company)
+    if rechunked:
+        _queue_embedding(None)
+    elif profile:
+        _queue_embedding(profile.id)
+    return _company_response(company, _company_counts(db, admin.id))
+
+
+@router.get("/knowledge-base/companies", response_model=List[OmniKnowledgeCompanyResponse])
+def list_knowledge_companies(db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
+    companies = db.query(OmniKnowledgeCompany).filter(OmniKnowledgeCompany.owner_id == admin.id).order_by(func.lower(OmniKnowledgeCompany.name)).all()
+    counts = _company_counts(db, admin.id)
+    return [_company_response(company, counts) for company in companies]
+
+
+@router.post("/knowledge-base/companies", response_model=OmniKnowledgeCompanyResponse, status_code=status.HTTP_201_CREATED)
+def create_knowledge_company(payload: OmniKnowledgeCompanyCreate, db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
+    fields = _clean_company_fields(payload.model_dump())
+    fields["name"] = _check_company_name(db, admin, payload.name)
+    company = OmniKnowledgeCompany(owner_id=admin.id, **fields)
+    db.add(company)
+    db.flush()
+    return _commit_company(db, admin, company, "created", rechunked=False)
+
+
+@router.put("/knowledge-base/companies/{company_id}", response_model=OmniKnowledgeCompanyResponse)
+def update_knowledge_company(company_id: uuid.UUID, payload: OmniKnowledgeCompanyUpdate, db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
+    company = _owned_company(db, admin, company_id)
+    fields = _clean_company_fields(payload.model_dump(exclude_unset=True))
+    renamed = False
+    if "name" in fields:
+        fields["name"] = _check_company_name(db, admin, fields["name"] or "", exclude_id=company.id)
+        renamed = fields["name"] != company.name
+    for key, value in fields.items():
+        setattr(company, key, value)
+    if renamed:
+        db.flush()
+        _rechunk_documents(db, [d for d in company.documents if d.kind != "profile"])
+    return _commit_company(db, admin, company, "updated", rechunked=renamed)
+
+
+@router.delete("/knowledge-base/companies/{company_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_knowledge_company(
+    company_id: uuid.UUID,
+    delete_documents: bool = Query(False, description="True elimina anche documenti e istruzioni; False li sposta fra quelli senza azienda"),
+    db: Session = Depends(get_db),
+    admin: Administrator = Depends(get_current_admin),
+):
+    company = _owned_company(db, admin, company_id)
+    documents = list(company.documents)
+    moved = []
+    for document in documents:
+        if delete_documents or document.kind == "profile":
+            db.delete(document)
+        else:
+            # Esplicito e non lasciato al SET NULL del database: cosi' cambia
+            # updated_at e la cache dei vettori si accorge dello spostamento.
+            document.company_ref = None
+            moved.append(document)
+    db.flush()
+    _rechunk_documents(db, moved)
+    OmnichannelService.log_audit(db, admin.id, admin.id, "SETTINGS_CHANGED", "knowledge_company", company.id, {"action": "deleted", "delete_documents": delete_documents})
+    db.delete(company)
+    db.commit()
+    if moved:
+        _queue_embedding(None)
+    return
+
+
+@router.post("/knowledge-base/move", response_model=List[OmniKnowledgeDocumentResponse])
+def move_knowledge_documents(payload: OmniKnowledgeDocumentMove, db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
+    company = _owned_company(db, admin, payload.company_id)
+    documents = db.query(OmniKnowledgeDocument).filter(
+        OmniKnowledgeDocument.owner_id == admin.id,
+        OmniKnowledgeDocument.id.in_(payload.document_ids),
+        OmniKnowledgeDocument.kind != "profile",
+    ).all()
+    if not documents:
+        raise HTTPException(status_code=404, detail="Nessun documento da spostare")
+    changed = [d for d in documents if d.company_id != (company.id if company else None)]
+    for document in changed:
+        document.company_ref = company
+    db.flush()
+    _rechunk_documents(db, changed)
+    db.commit()
+    if changed:
+        _queue_embedding(None)
+    embedded = _embedded_counts(db, admin.id, [d.id for d in documents])
+    return [_document_response(d, embedded.get(d.id, 0)) for d in documents]
+
+
+# --- Documenti e istruzioni ---------------------------------------------------
 @router.post("/knowledge-base", response_model=OmniKnowledgeDocumentResponse, status_code=status.HTTP_201_CREATED)
 def create_knowledge_document(payload: OmniKnowledgeDocumentCreate, db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
+    if not (payload.content_text or "").strip():
+        raise HTTPException(status_code=422, detail="Il contenuto e' obbligatorio")
+    company = _owned_company(db, admin, payload.company_id)
     document = OmniKnowledgeDocument(
-        owner_id=admin.id, title=payload.title, source_type=payload.source_type,
-        content_text=payload.content_text, source_url=payload.source_url, status="ready",
+        owner_id=admin.id, title=payload.title.strip(), source_type=payload.source_type,
+        content_text=payload.content_text, source_url=payload.source_url, status="processing",
+        kind=payload.kind, always_on=payload.always_on, company_ref=company,
     )
     db.add(document)
     db.flush()
+    return _save_document(db, admin, document, "created")
 
-    if payload.content_text:
-        for index, chunk_content in enumerate(_chunk_text(payload.content_text)):
-            db.add(OmniKnowledgeChunk(owner_id=admin.id, document_id=document.id, chunk_index=index, content=chunk_content))
 
-    OmnichannelService.log_audit(db, admin.id, admin.id, "SETTINGS_CHANGED", "knowledge_document", document.id, {"action": "created"})
-    db.commit()
-    db.refresh(document)
-    return document
+@router.post("/knowledge-base/upload", response_model=OmniKnowledgeDocumentResponse, status_code=status.HTTP_201_CREATED)
+def upload_knowledge_document(
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(None),
+    company_id: Optional[uuid.UUID] = Form(None),
+    db: Session = Depends(get_db),
+    admin: Administrator = Depends(get_current_admin),
+):
+    company = _owned_company(db, admin, company_id)
+    filename = file.filename or "documento"
+    data = file.file.read(knowledge.MAX_UPLOAD_BYTES + 1)
+    try:
+        source_type = knowledge.source_type_for_filename(filename)
+        content = knowledge.extract_text(filename, data)
+    except knowledge.KnowledgeExtractionError as e:
+        raise HTTPException(status_code=422, detail=f"{filename}: {e}")
+
+    default_title = filename.rsplit(".", 1)[0].replace("_", " ").strip() or filename
+    document = OmniKnowledgeDocument(
+        owner_id=admin.id, title=((title or "").strip() or default_title)[:255], source_type=source_type,
+        content_text=content, status="processing", kind="document", company_ref=company,
+        file_name=filename[:255],
+    )
+    db.add(document)
+    db.flush()
+    return _save_document(db, admin, document, "uploaded")
+
+
+@router.get("/knowledge-base/{document_id}", response_model=OmniKnowledgeDocumentResponse)
+def get_knowledge_document(document_id: uuid.UUID, db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
+    document = _owned_document(db, admin, document_id)
+    return _document_response(document, _embedded_counts(db, admin.id, [document.id]).get(document.id, 0))
+
+
+@router.put("/knowledge-base/{document_id}", response_model=OmniKnowledgeDocumentResponse)
+def update_knowledge_document(document_id: uuid.UUID, payload: OmniKnowledgeDocumentUpdate, db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
+    document = _owned_document(db, admin, document_id)
+    fields = payload.model_dump(exclude_unset=True)
+    if "content_text" in fields and not (fields["content_text"] or "").strip():
+        raise HTTPException(status_code=422, detail="Il contenuto e' obbligatorio")
+    if "company_id" in fields:
+        document.company_ref = _owned_company(db, admin, fields.pop("company_id"))
+    for key, value in fields.items():
+        setattr(document, key, value.strip() if key == "title" else value)
+    # Titolo e azienda stanno nell'intestazione di ogni blocco, quindi anche
+    # cambiare solo quelli richiede blocchi ed embedding nuovi.
+    return _save_document(db, admin, document, "updated")
 
 
 @router.delete("/knowledge-base/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_knowledge_document(document_id: uuid.UUID, db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
-    document = db.query(OmniKnowledgeDocument).filter(OmniKnowledgeDocument.id == document_id, OmniKnowledgeDocument.owner_id == admin.id).first()
-    if not document:
-        raise HTTPException(status_code=404, detail="Documento non trovato")
+    document = _owned_document(db, admin, document_id)
     db.delete(document)
     db.commit()
     return
 
 
-# ==============================================================================
-# Notifications
-# ==============================================================================
+@router.post("/knowledge-base/reindex", response_model=OmniKnowledgeStatsResponse)
+def reindex_knowledge_base(db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
+    """Calcola subito gli embedding mancanti (es. dopo aver ricaricato il credito OpenAI)."""
+    api_key, _ = get_openai_credentials(db)
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Nessuna API key OpenAI configurata (Impostazioni > AI)")
+    try:
+        knowledge.embed_pending_chunks(db, api_key, owner_id=admin.id)
+    except ConnectorError as e:
+        db.rollback()
+        raise HTTPException(status_code=502, detail=e.message)
+    db.query(OmniKnowledgeDocument).filter(
+        OmniKnowledgeDocument.owner_id == admin.id, OmniKnowledgeDocument.error_message.isnot(None)
+    ).update({OmniKnowledgeDocument.error_message: None}, synchronize_session=False)
+    db.commit()
+    return knowledge_stats(db, admin)
+
+
+@router.post("/knowledge-base/search", response_model=OmniKnowledgeSearchResponse)
+def search_knowledge_base(payload: OmniKnowledgeSearchRequest, db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
+    """
+    Prova della Knowledge Base dalla dashboard: mostra quali blocchi
+    arriverebbero al bot per questa domanda e, a richiesta, la risposta che
+    scriverebbe. E' la stessa ricerca usata per le bozze vere.
+    """
+    api_key, model = get_openai_credentials(db)
+    agent_config = OmnichannelService.get_or_create_ai_agent_config(db, admin.id)
+    company_id = _owned_company(db, admin, payload.company_id).id if payload.company_id else None
+
+    def to_hits(chunks: List[knowledge.RetrievedChunk]) -> List[OmniKnowledgeSearchHit]:
+        return [
+            OmniKnowledgeSearchHit(
+                document_id=c.document_id, document_title=c.document_title, company=c.company, kind=c.kind,
+                content=c.content, score=c.score, similarity=c.similarity, matched_by=c.matched_by,
+            )
+            for c in chunks
+        ]
+
+    if not payload.generate_reply:
+        chunks, warning = knowledge.search(db, admin.id, payload.query, api_key, company_id=company_id)
+        return OmniKnowledgeSearchResponse(hits=to_hits(chunks), warning=warning)
+
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Nessuna API key OpenAI configurata (Impostazioni > AI)")
+    try:
+        result = omni_ai.preview_reply(db, api_key, model, agent_config, admin.id, payload.query, company_id)
+    except ConnectorError as e:
+        raise HTTPException(status_code=502, detail=e.message)
+    return OmniKnowledgeSearchResponse(
+        hits=to_hits(result["kb_chunks"]), warning=result["kb_warning"], reply=result["text"],
+        input_tokens=result["input_tokens"], output_tokens=result["output_tokens"],
+    )
+
+
 @router.get("/notifications", response_model=List[OmniNotificationResponse])
 def list_notifications(unread_only: bool = False, limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db), admin: Administrator = Depends(get_current_admin)):
     query = db.query(OmniNotification).filter(

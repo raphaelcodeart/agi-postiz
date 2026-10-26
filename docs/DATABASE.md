@@ -122,10 +122,29 @@ Un "utente" qui è un **cliente/amico** della piattaforma — la persona il cui 
 | `status` | string | `active`, `inactive`, `suspended` — solo utenti `active` sono targetabili da una campagna. Chi si registra dal portale nasce `active` se `platform_settings.auto_activate_new_users` è attivo (default dal 2026-09-10), e chi collega un canale viene attivato comunque, qualunque sia l'impostazione. `suspended` non viene mai toccato automaticamente. Vedi `services/user_activation.py` |
 | `referral_link` | string, nullable | link personale/da promoter di questo utente, configurabile dalla pagina Utenti (icona 🔗 "Configura referral"). Usato solo se una campagna ha `include_referral_link=true` (vedi §7); un utente senza link configurato non è in nessun modo bloccato, riceve semplicemente il testo campagna invariato |
 | `personal_contacts` | string, nullable | blocco di contatti personali/firma di questo utente (nome, telefono, email...), configurabile dalla pagina Utenti (icona 🪪 "Contatti personali"). Usato solo se una campagna ha `include_personal_contacts=true` (vedi §7), aggiunto sempre **subito dopo** l'eventuale `referral_link`; un utente senza contatti configurati non è in nessun modo bloccato, riceve semplicemente il testo campagna invariato |
+| `city`, `postal_code` | string, nullable | compilati dall'utente nella finestra obbligatoria del primo accesso al portale (vedi [FUNCTIONALITY.md §4-ter](./FUNCTIONALITY.md#4-ter-portale-utenti-finali)); l'amministratore può correggerli dal form Utenti |
+| `profile_completed_at` | timestamp, nullable | prima compilazione della finestra (città, CAP, gruppi). NULL = il portale resta chiuso su quella finestra (`403 profile_incomplete`). Non si aggiorna alle modifiche successive. Migration `f2c7a9e3d4b1` |
 | `deleted_at` | timestamp, nullable | soft delete: mai cancellazione fisica di un utente con storico |
 
 ### `user_groups` / `user_group_association`
 Gruppi arbitrari di utenti (es. "Hotel Algarve", "Agenzia Lisbona") per targetizzare le campagne su un sottoinsieme di utenti invece che su tutti. `user_group_association` è la tabella ponte many-to-many tra `users` e `user_groups`.
+
+---
+
+### `user_notifications`
+
+Avvisi di servizio inviati a un utente dall'amministrazione — oggi il solo tipo `channel_requirement` ("hai meno canali social di quanti il progetto ne richieda", vedi [FUNCTIONALITY.md §3](./FUNCTIONALITY.md#3-utenti-gruppi-e-canali)). Una riga per invio, non una colonna `last_notified_at` su `users`: la dashboard mostra sia quando sia quante volte una persona è stata avvisata.
+
+| Colonna | Tipo | Note |
+|---|---|---|
+| `user_id` | UUID FK → `users.id` | `ON DELETE CASCADE` |
+| `kind` | string(50) | tipo di avviso; stringa e non enum SQL, aggiungerne uno non richiede migration |
+| `sent_by_administrator_id` | UUID FK → `administrators.id`, nullable | `ON DELETE SET NULL`: cancellare un amministratore non cancella la storia degli avvisi |
+| `email` | string(255) | indirizzo al momento dell'invio (se l'utente poi lo cambia, qui resta dove è andato davvero) |
+| `metadata` | JSONB, nullable | fotografia del momento: `connected_channels`, `required_channels`, `platforms` |
+| `sent_at` | timestamp tz | |
+
+Indice `(user_id, kind, sent_at)`: la pagina chiede sempre "ultimo avviso di questo tipo per questo utente". Migration `e6b1d4f8a2c7`.
 
 ---
 

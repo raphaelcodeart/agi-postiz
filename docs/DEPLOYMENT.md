@@ -182,6 +182,54 @@ python3 -c "import secrets, base64; print(base64.urlsafe_b64encode(secrets.token
 
 Salva con `Ctrl+O`, esci con `Ctrl+X`.
 
+### Email transazionali (obbligatorie perché il portale funzioni)
+
+Il portale manda due email: la conferma dell'indirizzo alla registrazione e il
+link di reset password. Senza, chi si registra resta fermo alla schermata
+«Controlla la tua email» e chi perde la password non può rientrare.
+
+| Variabile | Cosa metterci |
+|---|---|
+| `SMTP_HOST` | server di posta in uscita — su Hostinger `smtp.hostinger.com` |
+| `SMTP_PORT` / `SMTP_USE_SSL` | `587` + `false` (STARTTLS), oppure `465` + `true` (TLS implicito) |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | indirizzo completo della casella e la sua password |
+| `EMAIL_FROM_ADDRESS` | il mittente, es. `noreply@mamify.ai` |
+| `EMAIL_REPLY_TO` | una casella letta da qualcuno: chi risponde a un'email di benvenuto merita di essere letto |
+
+Tre cose da sapere prima di scegliere il mittente:
+
+1. **Il dominio del mittente deve autorizzare in SPF il server SMTP che usi**,
+   altrimenti i messaggi finiscono in spam. `mamify.ai` pubblica
+   `v=spf1 include:_spf.mail.hostinger.com ~all`, quindi un mittente `@mamify.ai`
+   deve uscire dall'SMTP di Hostinger. Se cambi provider, aggiorna prima l'SPF.
+2. **La porta 465 può essere filtrata in uscita.** Su questo server lo è: verso
+   `smtp.hostinger.com` la 465 va in timeout, la 587 risponde. Verifica prima di
+   dare la colpa alle credenziali:
+
+   ```bash
+   timeout 10 bash -c 'exec 3<>/dev/tcp/smtp.hostinger.com/587 && head -c 40 <&3'
+   # deve stampare il banner "220 ESMTP ..."
+   ```
+3. **Casella vuota = invio spento, non errore.** In locale e nei test non parte
+   niente e non fallisce niente; in produzione l'assenza di configurazione
+   compare nei log dei worker come errore esplicito.
+
+Prova d'invio, a container avviati:
+
+```bash
+docker compose -f docker-compose.prod.yml exec api python -c "
+from app.services.email import send_email, is_enabled
+print('configurato:', is_enabled())
+send_email(to_address='tua@email.example', subject='Prova AGI Post',
+           html_body='<p>Funziona.</p>', text_body='Funziona.')
+print('inviata')
+"
+```
+
+Se risponde `configurato: False` mancano `SMTP_HOST` o `EMAIL_FROM_ADDRESS`. Se
+si ferma su un errore di autenticazione, la password della casella è sbagliata —
+su Hostinger è quella della casella, non quella dell'account del pannello.
+
 **Importante:** questo file contiene segreti veri. Non finisce mai su Git (è già escluso in `.gitignore`) e non va condiviso.
 
 ---

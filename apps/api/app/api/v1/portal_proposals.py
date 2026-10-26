@@ -19,7 +19,7 @@ from typing import List
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.api.v1.portal import get_current_portal_user
+from app.api.v1.portal import get_verified_portal_user
 from app.db.session import get_db
 from app.models.campaign_proposal import CampaignProposal
 from app.models.media import MediaFile
@@ -90,7 +90,7 @@ def _validate_media(db: Session, user: User, media_file_id: uuid.UUID | None) ->
 def upload_proposal_media(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """
     Carica il video o l'immagine da allegare a una proposta.
@@ -117,7 +117,7 @@ def upload_proposal_media(
 @router.get("/proposals", response_model=List[CampaignProposalResponse])
 def list_my_proposals(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     rows = (
         db.query(CampaignProposal)
@@ -132,7 +132,7 @@ def list_my_proposals(
 def create_my_proposal(
     payload: CampaignProposalCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     _validate_media(db, current_user, payload.media_file_id)
 
@@ -160,7 +160,7 @@ def create_my_proposal(
 def get_my_proposal(
     proposal_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     return proposals.serialize(_owned_proposal(db, current_user, proposal_id))
 
@@ -170,7 +170,7 @@ def update_my_proposal(
     proposal_id: uuid.UUID,
     payload: CampaignProposalUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     proposal = _owned_proposal(db, current_user, proposal_id)
     _require_editable(proposal)
@@ -196,7 +196,7 @@ def update_my_proposal(
 def submit_my_proposal(
     proposal_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     proposal = _owned_proposal(db, current_user, proposal_id)
     _require_editable(proposal)
@@ -207,7 +207,7 @@ def submit_my_proposal(
 def delete_my_proposal(
     proposal_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """
     Si cancella solo cio' che e' ancora in mano al promoter: una bozza o una

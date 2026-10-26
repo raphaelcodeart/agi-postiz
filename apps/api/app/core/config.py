@@ -51,7 +51,78 @@ class Settings(BaseSettings):
     # (app/integrations/openai/client.py). Feature is hidden in the dashboard
     # when unset; never exposed to the frontend, requests are proxied server-side.
     OPENAI_API_KEY: Optional[str] = None
+    # CRM Mamify per l'Omnichannel Responder: ripiego a livello di
+    # installazione, la chiave salvata dalla pagina AI Agent vince sempre.
+    MAMIFY_RAG_API_KEY: Optional[str] = None
     OPENAI_MODEL: str = "gpt-4o-mini"
+
+    # --- Email transazionali (SMTP) ---
+    # Usate per la conferma dell'indirizzo alla registrazione e per il reset
+    # della password: due messaggi che, se non partono, lasciano l'utente fuori
+    # dal proprio account. Vuote = invio disattivato (vedi
+    # services/email/mailer.py): in locale e nei test non si manda niente e non
+    # si fallisce, in produzione l'assenza di configurazione e' un errore
+    # esplicito nei log, mai un'email silenziosamente persa.
+    SMTP_HOST: str = ""
+    # 587 + STARTTLS e non 465: la 465 verso smtp.hostinger.com e' filtrata in
+    # uscita da questo server (verificato aprendo i socket: la 587 risponde con
+    # il banner ESMTP, la 465 va in timeout). Chi cambia provider cambia anche
+    # SMTP_USE_SSL.
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    # True = TLS implicito (porta 465). False = connessione in chiaro promossa
+    # con STARTTLS (porta 587); la promozione e' obbligatoria, mai opzionale -
+    # se il server non offre STARTTLS l'invio fallisce invece di spedire le
+    # credenziali in chiaro.
+    SMTP_USE_SSL: bool = False
+    SMTP_TIMEOUT_SECONDS: int = 20
+    # Mittente. EMAIL_FROM_ADDRESS deve appartenere a un dominio che autorizza
+    # questo server in SPF, altrimenti i messaggi finiscono in spam: mamify.ai
+    # pubblica "v=spf1 include:_spf.mail.hostinger.com ~all", quindi l'invio
+    # deve passare per l'SMTP di Hostinger con una casella di quel dominio.
+    EMAIL_FROM_ADDRESS: str = ""
+    EMAIL_FROM_NAME: str = "AGI Post"
+    # Dove finiscono le risposte: la casella noreply non e' letta da nessuno, e
+    # un utente che risponde a un'email di benvenuto merita di essere letto.
+    EMAIL_REPLY_TO: str = ""
+    # Validita' dei link inviati per email. Quello di conferma e' lungo (una
+    # registrazione puo' essere letta il giorno dopo), quello di reset e' corto
+    # perche' e' un'apertura temporanea sull'account.
+    EMAIL_VERIFICATION_TTL_HOURS: int = 72
+    PASSWORD_RESET_TTL_MINUTES: int = 60
+    # Informative linkate nell'email di benvenuto: cliccare il pulsante vale
+    # come accettazione, quindi il testo deve poterle mostrare prima del clic.
+    # Sono gli stessi documenti linkati nel footer di mamify.ai e della landing
+    # di AGI Post, e devono restare gli stessi: il portale non ha condizioni
+    # proprie. Il frontend ne tiene la copia in
+    # apps/dashboard/app/portal/_shared/legal.tsx, perche' quelle pagine non
+    # leggono la configurazione del backend.
+    PRIVACY_POLICY_URL: str = "https://mamify.ai/privacy"
+    TERMS_URL: str = "https://mamify.ai/termini"
+    COOKIE_POLICY_URL: str = "https://mamify.ai/cookie"
+
+    # --- Requisito canali social per promoter ---
+    # Il progetto chiede a ogni promoter almeno questo numero di canali social
+    # collegati e utilizzabili (stessa regola di idoneita' delle campagne, vedi
+    # services/channel_requirement_service.py). La pagina "Canali insufficienti"
+    # della dashboard elenca chi e' sotto soglia e permette di avvisarlo via
+    # email; il cooldown evita che "Notifica a tutti" premuto due volte in una
+    # settimana mandi due volte lo stesso messaggio alla stessa persona.
+    MIN_SOCIAL_CHANNELS_PER_USER: int = 2
+    CHANNEL_NOTICE_COOLDOWN_DAYS: int = 7
+
+    @property
+    def email_enabled(self) -> bool:
+        """
+        Vero solo quando c'e' tutto il necessario per spedire davvero.
+
+        Un mittente senza host, o un host senza mittente, e' una configurazione
+        a meta': meglio trattarla come "invio spento" ed esserne avvisati nei
+        log che tentare una connessione che non puo' funzionare a ogni
+        registrazione.
+        """
+        return bool(self.SMTP_HOST and self.EMAIL_FROM_ADDRESS)
 
     # Media Storage
     UPLOAD_MAX_SIZE_BYTES: int = 524288000  # 500MB - see infrastructure/nginx/nginx.conf client_max_body_size, must match

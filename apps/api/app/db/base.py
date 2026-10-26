@@ -3,6 +3,8 @@
 from app.db.session import Base  # noqa
 from app.models.administrator import Administrator  # noqa
 from app.models.user import User, UserGroup  # noqa
+from app.models.auth_token import UserAuthToken  # noqa
+from app.models.user_notification import UserNotification  # noqa
 from app.models.buffer import BufferConnection, BufferOrganization, SocialChannel  # noqa
 from app.models.media import MediaFile  # noqa
 from app.models.campaign import Campaign, CampaignParticipant, CampaignTarget  # noqa
@@ -18,6 +20,7 @@ from app.models.omnichannel import (  # noqa
     OmniAIDraft,
     OmniAIAgentConfig,
     OmniKnowledgeDocument,
+    OmniKnowledgeCompany,
     OmniKnowledgeChunk,
     OmniTag,
     omni_conversation_tags,

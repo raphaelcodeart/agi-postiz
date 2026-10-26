@@ -18,7 +18,18 @@ const PORTAL_ROOT = "/portal";
 // carry the session cookie back, and bouncing the user to a login screen at the
 // very end of a successful authorisation would throw away the connection.
 // It renders nothing sensitive - it posts a message to its opener and closes.
-const PORTAL_PUBLIC_PATHS = ["/portal/login", "/portal/register", "/portal/connect-done"];
+const PORTAL_PUBLIC_PATHS = [
+  "/portal/login",
+  "/portal/register",
+  "/portal/forgot-password",
+  "/portal/connect-done",
+];
+// Le pagine che consumano un token arrivato per email si aprono sempre, con o
+// senza sessione. Senza: il link si apre spesso su un altro dispositivo, e
+// rimandare al login farebbe perdere il token. Con: chi aspetta la conferma e'
+// loggato proprio nel browser in cui clicca il link, e rimbalzarlo su /portal
+// lo riporterebbe alla finestra di attesa senza aver confermato niente.
+const PORTAL_TOKEN_PATHS = ["/portal/verify-email", "/portal/reset-password"];
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -31,6 +42,10 @@ export async function proxy(request: NextRequest) {
 }
 
 async function portalGuard(request: NextRequest, pathname: string) {
+  if (PORTAL_TOKEN_PATHS.some((path) => pathname.startsWith(path))) {
+    return NextResponse.next();
+  }
+
   const isPublic = PORTAL_PUBLIC_PATHS.some((path) => pathname.startsWith(path));
 
   const token = request.cookies.get(PORTAL_SESSION_COOKIE_NAME)?.value;

@@ -3,6 +3,8 @@ import { buildQueryString } from "@/lib/api/query-string";
 import type {
   OmniAIAgentConfigResponse,
   OmniAIAgentConfigUpdate,
+  OmniCrmKeyCheckResponse,
+  OmniCustomerCrmProfileResponse,
   OmniAIDraftResponse,
   OmniAnalyticsResponse,
   OmniBroadcastRequest,
@@ -16,8 +18,15 @@ import type {
   OmniCustomerResponse,
   OmniCustomerUpdate,
   OmniInternalNoteResponse,
+  OmniKnowledgeCompanyCreate,
+  OmniKnowledgeCompanyResponse,
+  OmniKnowledgeCompanyUpdate,
   OmniKnowledgeDocumentCreate,
+  OmniKnowledgeListParams,
   OmniKnowledgeDocumentResponse,
+  OmniKnowledgeDocumentUpdate,
+  OmniKnowledgeSearchResponse,
+  OmniKnowledgeStats,
   OmniMessageResponse,
   OmniNotificationResponse,
   OmniTagCreate,
@@ -165,9 +174,43 @@ export function updateAIAgentConfig(payload: OmniAIAgentConfigUpdate): Promise<O
   return apiClient.put<OmniAIAgentConfigResponse>(`${BASE}/ai-agent`, payload);
 }
 
+/** Prova la chiave CRM salvata senza leggere dati di nessun cliente. */
+export function checkCrmKey(): Promise<OmniCrmKeyCheckResponse> {
+  return apiClient.post<OmniCrmKeyCheckResponse>(`${BASE}/ai-agent/crm/check`);
+}
+
+export function getCustomerCrmProfile(customerId: string, channel?: string): Promise<OmniCustomerCrmProfileResponse> {
+  const query = channel ? `?channel=${encodeURIComponent(channel)}` : "";
+  return apiClient.get<OmniCustomerCrmProfileResponse>(`${BASE}/customers/${customerId}/crm-profile${query}`);
+}
+
 // Knowledge base
-export function listKnowledgeDocuments(): Promise<OmniKnowledgeDocumentResponse[]> {
-  return apiClient.get<OmniKnowledgeDocumentResponse[]>(`${BASE}/knowledge-base`);
+export function listKnowledgeDocuments(params: OmniKnowledgeListParams = {}): Promise<OmniKnowledgeDocumentResponse[]> {
+  return apiClient.get<OmniKnowledgeDocumentResponse[]>(`${BASE}/knowledge-base${buildQueryString({ company: params.company, q: params.q?.trim() || undefined })}`);
+}
+
+export function getKnowledgeDocument(id: string): Promise<OmniKnowledgeDocumentResponse> {
+  return apiClient.get<OmniKnowledgeDocumentResponse>(`${BASE}/knowledge-base/${id}`);
+}
+
+export function moveKnowledgeDocuments(documentIds: string[], companyId: string | null): Promise<OmniKnowledgeDocumentResponse[]> {
+  return apiClient.post<OmniKnowledgeDocumentResponse[]>(`${BASE}/knowledge-base/move`, { document_ids: documentIds, company_id: companyId });
+}
+
+export function listKnowledgeCompanies(): Promise<OmniKnowledgeCompanyResponse[]> {
+  return apiClient.get<OmniKnowledgeCompanyResponse[]>(`${BASE}/knowledge-base/companies`);
+}
+
+export function createKnowledgeCompany(payload: OmniKnowledgeCompanyCreate): Promise<OmniKnowledgeCompanyResponse> {
+  return apiClient.post<OmniKnowledgeCompanyResponse>(`${BASE}/knowledge-base/companies`, payload);
+}
+
+export function updateKnowledgeCompany(id: string, payload: OmniKnowledgeCompanyUpdate): Promise<OmniKnowledgeCompanyResponse> {
+  return apiClient.put<OmniKnowledgeCompanyResponse>(`${BASE}/knowledge-base/companies/${id}`, payload);
+}
+
+export function deleteKnowledgeCompany(id: string, deleteDocuments: boolean): Promise<void> {
+  return apiClient.delete(`${BASE}/knowledge-base/companies/${id}${buildQueryString({ delete_documents: deleteDocuments })}`);
 }
 
 export function createKnowledgeDocument(payload: OmniKnowledgeDocumentCreate): Promise<OmniKnowledgeDocumentResponse> {
@@ -176,6 +219,29 @@ export function createKnowledgeDocument(payload: OmniKnowledgeDocumentCreate): P
 
 export function deleteKnowledgeDocument(id: string): Promise<void> {
   return apiClient.delete(`${BASE}/knowledge-base/${id}`);
+}
+
+export function updateKnowledgeDocument(id: string, payload: OmniKnowledgeDocumentUpdate): Promise<OmniKnowledgeDocumentResponse> {
+  return apiClient.put<OmniKnowledgeDocumentResponse>(`${BASE}/knowledge-base/${id}`, payload);
+}
+
+export function uploadKnowledgeFile(file: File, companyId?: string | null): Promise<OmniKnowledgeDocumentResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (companyId) formData.append("company_id", companyId);
+  return apiClient.post<OmniKnowledgeDocumentResponse>(`${BASE}/knowledge-base/upload`, formData);
+}
+
+export function getKnowledgeStats(): Promise<OmniKnowledgeStats> {
+  return apiClient.get<OmniKnowledgeStats>(`${BASE}/knowledge-base/stats`);
+}
+
+export function reindexKnowledgeBase(): Promise<OmniKnowledgeStats> {
+  return apiClient.post<OmniKnowledgeStats>(`${BASE}/knowledge-base/reindex`);
+}
+
+export function searchKnowledgeBase(query: string, generateReply: boolean, companyId?: string | null): Promise<OmniKnowledgeSearchResponse> {
+  return apiClient.post<OmniKnowledgeSearchResponse>(`${BASE}/knowledge-base/search`, { query, generate_reply: generateReply, company_id: companyId || null });
 }
 
 // Notifications

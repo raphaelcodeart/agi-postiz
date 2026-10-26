@@ -4,6 +4,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import func, or_
+from app.core.config import settings
 from app.db.session import get_db
 from app.api.v1.auth import get_current_admin
 from app.models.administrator import Administrator
@@ -16,7 +17,14 @@ from app.schemas.schemas import (
     GroupCreate,
     GroupUpdate,
     GroupResponse,
+    ChannelRequirementBulkRequest,
+    ChannelRequirementBulkResponse,
+    ChannelRequirementChannel,
+    ChannelRequirementNoticeResponse,
+    ChannelRequirementResponse,
+    ChannelRequirementUser,
 )
+from app.services import channel_requirement_service as channel_req
 
 router = APIRouter()
 
@@ -65,6 +73,8 @@ def create_user(
         name=payload.name,
         email=payload.email,
         company_name=payload.company_name,
+        city=payload.city,
+        postal_code=payload.postal_code,
         status=payload.status,
         notes=payload.notes,
         referral_link=payload.referral_link,
@@ -97,6 +107,109 @@ def get_users_summary(db: Session = Depends(get_db), admin: Administrator = Depe
         active=counts.get("active", 0),
         inactive=counts.get("inactive", 0),
         suspended=counts.get("suspended", 0),
+        below_channel_requirement=channel_req.count_users_below_requirement(db),
+    )
+
+
+# ==============================================================================
+# Requisito canali social (vedi services/channel_requirement_service.py)
+# ==============================================================================
+# Registrati prima di "/{user_id}" per la stessa ragione di "/summary": il
+# segmento "channel-requirement" non deve essere letto come un UUID.
+
+def _requirement_user(row: channel_req.UserBelowRequirement) -> ChannelRequirementUser:
+    return ChannelRequirementUser(
+        id=row.user.id,
+        name=row.user.name,
+        email=row.user.email,
+        company_name=row.user.company_name,
+        status=row.user.status,
+        has_portal_access=row.user.password_hash is not None,
+        connected_channels_count=row.connected_count,
+        connected_channels=[
+            ChannelRequirementChannel(platform=platform, name=name)
+            for platform, name in row.connected_channels
+        ],
+        last_notified_at=row.last_notified_at,
+        notifications_count=row.notifications_count,
+    )
+
+
+@router.get("/channel-requirement", response_model=ChannelRequirementResponse)
+def list_users_below_channel_requirement(
+    status_filter: Optional[str] = None,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db),
+    admin: Administrator = Depends(get_current_admin),
+):
+    """Utenti con meno canali social utilizzabili di quanti il progetto ne richieda."""
+    rows = channel_req.list_users_below_requirement(db, status_filter=status_filter, search=search)
+    return ChannelRequirementResponse(
+        required_channels=channel_req.required_channels(),
+        cooldown_days=channel_req.cooldown_days(),
+        email_enabled=settings.email_enabled,
+        total=len(rows),
+        without_channels=sum(1 for r in rows if r.connected_count == 0),
+        never_notified=sum(1 for r in rows if r.notifications_count == 0),
+        users=[_requirement_user(r) for r in rows],
+    )
+
+
+@router.post("/channel-requirement/notify-all", response_model=ChannelRequirementBulkResponse)
+def notify_all_below_channel_requirement(
+    payload: ChannelRequirementBulkRequest,
+    db: Session = Depends(get_db),
+    admin: Administrator = Depends(get_current_admin),
+):
+    """
+    Avvisa via email tutti gli utenti sotto soglia, saltando chi e' stato
+    avvisato negli ultimi ``skip_notified_within_days`` giorni (0 = nessuno
+    saltato). 503 se l'invio email non e' configurato: niente viene registrato.
+    """
+    try:
+        result = channel_req.notify_all(
+            db,
+            admin,
+            status_filter=payload.status_filter,
+            skip_notified_within_days=payload.skip_notified_within_days,
+        )
+    except channel_req.EmailDisabledError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    return ChannelRequirementBulkResponse(
+        sent=len(result.sent),
+        skipped_recent=len(result.skipped_recent),
+        failed=len(result.failed),
+        sent_user_ids=result.sent,
+        failed_user_ids=result.failed,
+    )
+
+
+@router.post("/{user_id}/channel-requirement/notify", response_model=ChannelRequirementNoticeResponse)
+def notify_user_below_channel_requirement(
+    user_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    admin: Administrator = Depends(get_current_admin),
+):
+    """Invia l'avviso a un singolo utente, sempre (nessun cooldown sul singolo)."""
+    user = db.query(User).filter(User.id == user_id, User.deleted_at.is_(None)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    try:
+        notice = channel_req.notify_user(db, user, admin)
+    except channel_req.EmailDisabledError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    count = (
+        db.query(func.count(channel_req.UserNotification.id))
+        .filter(
+            channel_req.UserNotification.user_id == user.id,
+            channel_req.UserNotification.kind == channel_req.KIND_CHANNEL_REQUIREMENT,
+        )
+        .scalar()
+    )
+    return ChannelRequirementNoticeResponse(
+        user_id=user.id, email=notice.email, sent_at=notice.sent_at, notifications_count=count
     )
 
 

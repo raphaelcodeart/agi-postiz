@@ -55,6 +55,8 @@ export function UserFormDialog({ open, onOpenChange, user }: UserFormDialogProps
       name: "",
       email: "",
       company_name: "",
+      city: "",
+      postal_code: "",
       status: "active",
       notes: "",
       group_ids: [],
@@ -67,6 +69,8 @@ export function UserFormDialog({ open, onOpenChange, user }: UserFormDialogProps
         name: user?.name ?? "",
         email: user?.email ?? "",
         company_name: user?.company_name ?? "",
+        city: user?.city ?? "",
+        postal_code: user?.postal_code ?? "",
         status: user?.status ?? "active",
         notes: user?.notes ?? "",
         group_ids: user?.groups.map((g) => g.id) ?? [],
@@ -79,6 +83,8 @@ export function UserFormDialog({ open, onOpenChange, user }: UserFormDialogProps
       name: values.name,
       email: values.email,
       company_name: values.company_name || null,
+      city: values.city || null,
+      postal_code: values.postal_code || null,
       status: values.status,
       notes: values.notes || null,
       group_ids: values.group_ids ?? [],
@@ -146,6 +152,34 @@ export function UserFormDialog({ open, onOpenChange, user }: UserFormDialogProps
                 </FormItem>
               )}
             />
+            <div className="grid grid-cols-3 gap-3">
+              <FormField
+                control={form.control}
+                name="city"
+                render={({ field }) => (
+                  <FormItem className="col-span-2">
+                    <FormLabel>Città</FormLabel>
+                    <FormControl>
+                      <Input {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="postal_code"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>CAP</FormLabel>
+                    <FormControl>
+                      <Input {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
             <FormField
               control={form.control}
               name="status"

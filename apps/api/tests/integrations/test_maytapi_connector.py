@@ -132,9 +132,10 @@ def test_the_url_secret_is_what_authenticates_the_webhook():
 # --- invio -------------------------------------------------------------------
 
 class _FakeResponse:
-    def __init__(self, payload, status_code=200):
+    def __init__(self, payload, status_code=200, text=""):
         self._payload = payload
         self.status_code = status_code
+        self.text = text
 
     def json(self):
         return self._payload
@@ -176,3 +177,79 @@ def test_missing_configuration_is_reported_before_any_network_call():
     connector = MaytapiConnector(_account(product_id="", phone_id=""), access_token="token")
     with pytest.raises(ConnectorError, match="Product ID"):
         connector.send_message("x", "y")
+
+
+# --- registrazione del webhook -----------------------------------------------
+
+def test_setwebhook_success_is_not_expected_to_carry_a_success_field(monkeypatch):
+    """
+    La regressione del 2026-09-22. A differenza di /status e /sendMessage,
+    setWebhook risponde 200 con la configurazione del prodotto e **nessun**
+    campo `success`. Pretenderlo faceva fallire ogni registrazione riuscita:
+    il webhook veniva registrato davvero e la dashboard diceva "errore
+    sconosciuto", mandando a cercare il problema dalla parte sbagliata.
+    """
+    url = "https://api.example.test/api/v1/omnichannel-responder/webhooks/maytapi/abc/s3cret"
+
+    def fake_post(post_url, headers=None, json=None, timeout=None):
+        return _FakeResponse({
+            "pid": "p1",
+            "webhook": json["webhook"],
+            "ack_delivery": True,
+            "phone_limit": 1,
+        })
+
+    monkeypatch.setattr("app.integrations.omnichannel.connectors.maytapi.httpx.post", fake_post)
+
+    assert _connector().register_webhook(url)["webhook"] == url
+
+
+def test_setwebhook_uses_the_product_endpoint(monkeypatch):
+    captured = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured.update(url=url, headers=headers, json=json)
+        return _FakeResponse({"pid": "p1", "webhook": json["webhook"]})
+
+    monkeypatch.setattr("app.integrations.omnichannel.connectors.maytapi.httpx.post", fake_post)
+    _connector().register_webhook("https://api.example.test/hook")
+
+    assert captured["url"] == "https://api.maytapi.com/api/p1/setWebhook"
+    assert captured["headers"]["x-maytapi-key"] == "token"
+    assert captured["json"] == {"webhook": "https://api.example.test/hook"}
+
+
+def test_an_explicit_refusal_is_still_a_failure(monkeypatch):
+    """`success` assente significa riuscito, `success: False` no."""
+    monkeypatch.setattr(
+        "app.integrations.omnichannel.connectors.maytapi.httpx.post",
+        lambda *a, **k: _FakeResponse({"success": False, "message": "Webhook url is not valid"}),
+    )
+
+    with pytest.raises(ConnectorError, match="Webhook url is not valid"):
+        _connector().register_webhook("https://api.example.test/hook")
+
+
+def test_an_error_without_a_message_reports_the_raw_body(monkeypatch):
+    """"errore sconosciuto" non dice nulla a chi deve risolvere: se Maytapi non
+    spiega il rifiuto, si mostra almeno cosa ha risposto."""
+    monkeypatch.setattr(
+        "app.integrations.omnichannel.connectors.maytapi.httpx.post",
+        lambda *a, **k: _FakeResponse({}, status_code=402, text='{"quota":"exceeded"}'),
+    )
+
+    with pytest.raises(ConnectorError, match="quota"):
+        _connector().register_webhook("https://api.example.test/hook")
+
+
+def test_a_webhook_stored_under_another_url_is_reported(monkeypatch):
+    """Chiamata accettata ma webhook di qualcun altro: i messaggi non
+    arriverebbero mai e senza questo controllo lo si scoprirebbe solo dal
+    silenzio dell'inbox."""
+    monkeypatch.setattr(
+        "app.integrations.omnichannel.connectors.maytapi.httpx.post",
+        lambda *a, **k: _FakeResponse({"pid": "p1", "webhook": "https://qualcun-altro.test/hook"}),
+    )
+
+    with pytest.raises(ConnectorError, match="qualcun-altro"):
+        _connector().register_webhook("https://api.example.test/hook")

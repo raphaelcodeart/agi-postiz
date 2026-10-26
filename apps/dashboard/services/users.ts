@@ -2,7 +2,16 @@ import { apiClient } from "@/lib/api/client";
 import { buildQueryString } from "@/lib/api/query-string";
 import { isMockApiEnabled } from "@/lib/env";
 import * as mock from "@/lib/api/mock/adapter";
-import type { GroupResponse, UserResponse, UserStatus, UserSummaryResponse } from "@/types/api";
+import type {
+  ChannelRequirementBulkRequest,
+  ChannelRequirementBulkResponse,
+  ChannelRequirementNoticeResponse,
+  ChannelRequirementResponse,
+  GroupResponse,
+  UserResponse,
+  UserStatus,
+  UserSummaryResponse,
+} from "@/types/api";
 
 export interface ListUsersParams {
   skip?: number;
@@ -25,6 +34,8 @@ export interface UserPayload {
   name: string;
   email: string;
   company_name?: string | null;
+  city?: string | null;
+  postal_code?: string | null;
   status: UserStatus;
   notes?: string | null;
   referral_link?: string | null;
@@ -75,4 +86,28 @@ export function createGroup(payload: GroupPayload): Promise<GroupResponse> {
 export function updateGroup(groupId: string, payload: GroupPayload): Promise<GroupResponse> {
   if (isMockApiEnabled()) return mock.updateGroup(groupId, payload);
   return apiClient.put<GroupResponse>(`/users/groups/${groupId}`, payload);
+}
+
+// --- Requisito canali social -------------------------------------------------
+
+export interface ChannelRequirementParams {
+  status_filter?: UserStatus | "";
+  search?: string;
+}
+
+export function getChannelRequirement(params: ChannelRequirementParams = {}): Promise<ChannelRequirementResponse> {
+  if (isMockApiEnabled()) return mock.getChannelRequirement(params);
+  return apiClient.get<ChannelRequirementResponse>(`/users/channel-requirement${buildQueryString(params)}`);
+}
+
+export function notifyChannelRequirement(userId: string): Promise<ChannelRequirementNoticeResponse> {
+  if (isMockApiEnabled()) return mock.notifyChannelRequirement(userId);
+  return apiClient.post<ChannelRequirementNoticeResponse>(`/users/${userId}/channel-requirement/notify`, {});
+}
+
+export function notifyAllChannelRequirement(
+  payload: ChannelRequirementBulkRequest
+): Promise<ChannelRequirementBulkResponse> {
+  if (isMockApiEnabled()) return mock.notifyAllChannelRequirement(payload);
+  return apiClient.post<ChannelRequirementBulkResponse>("/users/channel-requirement/notify-all", payload);
 }

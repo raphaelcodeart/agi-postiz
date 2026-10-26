@@ -37,8 +37,12 @@ import type {
   SystemSettingsUpdatePayload,
   UserResponse,
   UserSummaryResponse,
+  ChannelRequirementBulkRequest,
+  ChannelRequirementBulkResponse,
+  ChannelRequirementNoticeResponse,
+  ChannelRequirementResponse,
 } from "@/types/api";
-import type { GroupPayload, ListUsersParams, UserPayload } from "@/services/users";
+import type { ChannelRequirementParams, GroupPayload, ListUsersParams, UserPayload } from "@/services/users";
 import type { ListChannelsParams } from "@/services/channels";
 import type { ListCampaignsParams } from "@/services/campaigns";
 import type { ListPublicationFeedParams, ListPublicationsParams } from "@/services/publications";
@@ -89,7 +93,34 @@ export function getUsersSummary(): Promise<UserSummaryResponse> {
     active: byStatus.active ?? 0,
     inactive: byStatus.inactive ?? 0,
     suspended: byStatus.suspended ?? 0,
+    below_channel_requirement: 0,
   });
+}
+
+// Il mock non modella i canali per utente: la pagina "Canali insufficienti"
+// risulta vuota, con l'invio email disattivato.
+export function getChannelRequirement(params: ChannelRequirementParams = {}): Promise<ChannelRequirementResponse> {
+  void params;
+  return delay({
+    required_channels: 2,
+    cooldown_days: 7,
+    email_enabled: false,
+    total: 0,
+    without_channels: 0,
+    never_notified: 0,
+    users: [],
+  });
+}
+
+export function notifyChannelRequirement(userId: string): Promise<ChannelRequirementNoticeResponse> {
+  const user = mockUsers.find((u) => u.id === userId);
+  if (!user) throw new ApiError(404, "User not found");
+  return delay({ user_id: userId, email: user.email, sent_at: new Date().toISOString(), notifications_count: 1 });
+}
+
+export function notifyAllChannelRequirement(payload: ChannelRequirementBulkRequest): Promise<ChannelRequirementBulkResponse> {
+  void payload;
+  return delay({ sent: 0, skipped_recent: 0, failed: 0, sent_user_ids: [], failed_user_ids: [] });
 }
 
 export function createUser(payload: UserPayload): Promise<UserResponse> {
@@ -98,6 +129,9 @@ export function createUser(payload: UserPayload): Promise<UserResponse> {
     name: payload.name,
     email: payload.email,
     company_name: payload.company_name ?? null,
+    city: payload.city ?? null,
+    postal_code: payload.postal_code ?? null,
+    profile_completed_at: null,
     status: payload.status,
     notes: payload.notes ?? null,
     referral_link: payload.referral_link ?? null,

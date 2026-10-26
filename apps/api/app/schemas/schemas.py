@@ -52,6 +52,8 @@ class UserCreate(BaseModel):
     name: str = Field(..., max_length=255)
     email: EmailStr
     company_name: Optional[str] = Field(None, max_length=255)
+    city: Optional[str] = Field(None, max_length=120)
+    postal_code: Optional[str] = Field(None, max_length=20)
     status: str = Field("active", description="active, inactive, suspended")
     notes: Optional[str] = Field(None, max_length=1000)
     referral_link: Optional[str] = Field(None, max_length=1000)
@@ -62,6 +64,8 @@ class UserUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=255)
     email: Optional[EmailStr] = None
     company_name: Optional[str] = Field(None, max_length=255)
+    city: Optional[str] = Field(None, max_length=120)
+    postal_code: Optional[str] = Field(None, max_length=20)
     status: Optional[str] = None
     notes: Optional[str] = Field(None, max_length=1000)
     referral_link: Optional[str] = Field(None, max_length=1000)
@@ -74,6 +78,11 @@ class UserResponse(BaseModel):
     email: EmailStr
     company_name: Optional[str]
     status: str
+    city: Optional[str] = None
+    postal_code: Optional[str] = None
+    # Quando l'utente ha compilato la finestra obbligatoria del portale
+    # (citta', CAP, gruppi). NULL = non ancora, o utente che non usa il portale.
+    profile_completed_at: Optional[datetime] = None
     notes: Optional[str]
     referral_link: Optional[str] = None
     personal_contacts: Optional[str] = None
@@ -94,6 +103,62 @@ class UserSummaryResponse(BaseModel):
     active: int
     inactive: int
     suspended: int
+    # Utenti attivi con meno canali social del richiesto: alimenta il pulsante
+    # "Canali insufficienti" sopra la lista Utenti.
+    below_channel_requirement: int = 0
+
+
+class ChannelRequirementChannel(BaseModel):
+    platform: str
+    name: str
+
+
+class ChannelRequirementUser(BaseModel):
+    """Un utente con meno canali social utilizzabili del richiesto, con la
+    storia degli avvisi gia' ricevuti (services/channel_requirement_service.py)."""
+    id: uuid.UUID
+    name: str
+    email: EmailStr
+    company_name: Optional[str]
+    status: str
+    has_portal_access: bool
+    connected_channels_count: int
+    connected_channels: List[ChannelRequirementChannel]
+    last_notified_at: Optional[datetime]
+    notifications_count: int
+
+
+class ChannelRequirementResponse(BaseModel):
+    required_channels: int
+    cooldown_days: int
+    # False = SMTP non configurato: la dashboard disattiva i pulsanti di invio
+    # e spiega perche', invece di far scoprire l'errore al clic.
+    email_enabled: bool
+    total: int
+    without_channels: int
+    never_notified: int
+    users: List[ChannelRequirementUser]
+
+
+class ChannelRequirementNoticeResponse(BaseModel):
+    user_id: uuid.UUID
+    email: EmailStr
+    sent_at: datetime
+    notifications_count: int
+
+
+class ChannelRequirementBulkRequest(BaseModel):
+    status_filter: Optional[str] = Field("active", description="active, inactive, suspended; null = tutti")
+    # 0 = avvisa anche chi ha gia' ricevuto il messaggio di recente.
+    skip_notified_within_days: Optional[int] = Field(None, ge=0, le=365)
+
+
+class ChannelRequirementBulkResponse(BaseModel):
+    sent: int
+    skipped_recent: int
+    failed: int
+    sent_user_ids: List[uuid.UUID]
+    failed_user_ids: List[uuid.UUID]
 
 
 class StatusCountsSummaryResponse(BaseModel):
@@ -1020,6 +1085,12 @@ class OmniAIAgentConfigResponse(BaseModel):
     auto_generate_draft: bool
     response_mode: str
     sensitive_categories: Optional[List[str]] = Field(None, validation_alias="sensitive_categories_json", serialization_alias="sensitive_categories")
+    # CRM Mamify: la chiave non esce mai, solo se e' impostata (dalla pagina o
+    # dall'ambiente) - vedi api/v1/omnichannel.py::_agent_config_response.
+    crm_enabled: bool = False
+    crm_base_url: Optional[str] = None
+    crm_api_key_set: bool = False
+    crm_api_key_source: Optional[str] = None  # "config" | "env" | None
 
     class Config:
         from_attributes = True
@@ -1047,13 +1118,87 @@ class OmniAIAgentConfigUpdate(BaseModel):
     # of this setting - see omnichannel_draft_service.py module docstring.
     response_mode: Optional[str] = None
     sensitive_categories: Optional[List[str]] = None
+    # CRM Mamify. crm_api_key: scrivi la chiave (cifrata lato server), stringa
+    # vuota = rimuovila; non inviarla = lascia quella che c'e'.
+    crm_enabled: Optional[bool] = None
+    crm_api_key: Optional[str] = Field(None, max_length=512)
+    crm_base_url: Optional[str] = Field(None, max_length=255)
+
+
+class OmniCrmKeyCheckResponse(BaseModel):
+    # ok | invalid | no_permission | unavailable | error | not_configured
+    status: str
+    message: str
+
+
+class OmniCustomerCrmProfileResponse(BaseModel):
+    """
+    Cosa il CRM sa del contatto che scrive, per la scheda cliente dell'Inbox.
+    `status` e' lo stesso di crm/tools.py::CrmContext (identified, ambiguous,
+    not_found, unverified, unavailable) piu' `disabled` se l'integrazione e'
+    spenta; `identity_source` dice da dove viene l'identita' (channel|operator).
+    """
+    status: str
+    identity_source: Optional[str] = None
+    customer: Optional[Dict[str, Any]] = None
+    wallets: Optional[Dict[str, Any]] = None
+    candidates: Optional[int] = None
+    message: Optional[str] = None
 
 
 class OmniKnowledgeDocumentCreate(BaseModel):
-    title: str
-    source_type: str = "manual"  # manual, faq, url, txt (pdf/docx parsing not implemented in this MVP)
+    title: str = Field(..., min_length=1, max_length=255)
+    # I file (pdf, docx, xlsx, csv, txt, md) passano da POST /knowledge-base/upload.
+    source_type: str = "manual"
     content_text: Optional[str] = None
     source_url: Optional[str] = None
+    kind: Literal["document", "instruction"] = "document"
+    always_on: bool = False
+    # None = vale per tutte le aziende.
+    company_id: Optional[uuid.UUID] = None
+
+
+class OmniKnowledgeDocumentUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=255)
+    content_text: Optional[str] = None
+    kind: Optional[Literal["document", "instruction"]] = None
+    always_on: Optional[bool] = None
+    company_id: Optional[uuid.UUID] = None
+
+
+class OmniKnowledgeDocumentMove(BaseModel):
+    """Sposta piu' documenti in un'altra azienda (None = nessuna azienda)."""
+    document_ids: List[uuid.UUID] = Field(..., min_length=1, max_length=1000)
+    company_id: Optional[uuid.UUID] = None
+
+
+class OmniKnowledgeCompanyBase(BaseModel):
+    description: Optional[str] = Field(None, max_length=5000)
+    website: Optional[str] = Field(None, max_length=500)
+    email: Optional[str] = Field(None, max_length=255)
+    phone: Optional[str] = Field(None, max_length=100)
+    address: Optional[str] = Field(None, max_length=500)
+    notes: Optional[str] = Field(None, max_length=5000)
+
+
+class OmniKnowledgeCompanyCreate(OmniKnowledgeCompanyBase):
+    name: str = Field(..., min_length=1, max_length=255)
+
+
+class OmniKnowledgeCompanyUpdate(OmniKnowledgeCompanyBase):
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+
+
+class OmniKnowledgeCompanyResponse(OmniKnowledgeCompanyBase):
+    id: uuid.UUID
+    name: str
+    document_count: int = 0
+    instruction_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 class OmniKnowledgeDocumentResponse(BaseModel):
@@ -1063,11 +1208,61 @@ class OmniKnowledgeDocumentResponse(BaseModel):
     content_text: Optional[str]
     source_url: Optional[str]
     status: str
+    kind: str
+    always_on: bool
+    company_id: Optional[uuid.UUID]
+    company: Optional[str]
+    file_name: Optional[str]
+    # Nell'elenco: content_text e' None e c'e' solo l'inizio del testo (con
+    # centinaia di PDF l'elenco completo peserebbe megabyte). Il testo intero
+    # arriva da GET /knowledge-base/{id}.
+    preview: Optional[str] = None
+    chunk_count: int
+    embedded_chunks: int = 0
+    error_message: Optional[str]
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class OmniKnowledgeSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=2000)
+    # True = genera anche la risposta di prova (una chiamata al modello di chat);
+    # False = solo ricerca, costa al massimo un embedding.
+    generate_reply: bool = False
+    # Prova come se scrivesse un cliente di questa azienda: solo i suoi
+    # documenti e quelli senza azienda.
+    company_id: Optional[uuid.UUID] = None
+
+
+class OmniKnowledgeSearchHit(BaseModel):
+    document_id: uuid.UUID
+    document_title: str
+    company: Optional[str]
+    kind: str
+    content: str
+    score: float
+    similarity: Optional[float]
+    matched_by: List[str]
+
+
+class OmniKnowledgeSearchResponse(BaseModel):
+    hits: List[OmniKnowledgeSearchHit]
+    warning: Optional[str] = None
+    reply: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+
+
+class OmniKnowledgeStatsResponse(BaseModel):
+    documents: int
+    instructions: int
+    always_on_instructions: int
+    chunks: int
+    embedded_chunks: int
+    companies: List[str]
 
 
 class OmniNotificationResponse(BaseModel):

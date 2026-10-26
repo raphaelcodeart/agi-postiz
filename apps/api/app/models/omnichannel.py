@@ -14,7 +14,7 @@ owner_id alone and no data ever leaks across accounts.
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
-from sqlalchemy import String, Text, DateTime, ForeignKey, UniqueConstraint, Integer, Float, Boolean, Table, Column
+from sqlalchemy import String, Text, DateTime, ForeignKey, UniqueConstraint, Integer, Float, Boolean, Table, Column, LargeBinary
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.session import Base
@@ -260,16 +260,25 @@ class OmniAIAgentConfig(Base):
     # Topics that always force HUMAN_REVIEW_REQUIRED instead of a ready-to-send
     # draft (refund, legal, medical, complaint...) - see integrations/omnichannel/ai.py
     sensitive_categories_json: Mapped[Optional[List[str]]] = mapped_column("sensitive_categories", JSONB, nullable=True)
+    # Integrazione CRM Mamify ("API Mamify per il RAG"), vedi
+    # integrations/omnichannel/crm/. Spenta per default: accesa, l'AI riceve
+    # strumenti per leggere saldi/ordini/rete del cliente che scrive -
+    # identificato dal numero del canale, mai da cio' che scrive (tools.py).
+    # La chiave e' cifrata con lo stesso EncryptionService dei token canale e
+    # non viene mai restituita dall'API (solo "impostata si'/no").
+    crm_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+    crm_api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    crm_base_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
 
 # ==============================================================================
-# Knowledge base - lightweight RAG. MVP retrieval is keyword-based (ILIKE) over
-# omni_knowledge_chunks; the schema is shaped so a real embedding column/vector
-# index (pgvector) can be added later purely additively (see integrations/
-# omnichannel/ai.py docstring) without touching this table's meaning.
+# Knowledge base - RAG ibrido (full-text Postgres + embedding), vedi
+# app/integrations/omnichannel/knowledge.py. Un documento e' un testo
+# (incollato o estratto da un file) oppure un'istruzione per il bot; i blocchi
+# (omni_knowledge_chunks) sono l'unita' che la ricerca restituisce.
 # ==============================================================================
 class OmniKnowledgeDocument(Base):
     __tablename__ = "omni_knowledge_documents"
@@ -278,15 +287,68 @@ class OmniKnowledgeDocument(Base):
     owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("administrators.id", ondelete="CASCADE"), nullable=False, index=True)
 
     title: Mapped[str] = mapped_column(String(255), nullable=False)
-    source_type: Mapped[str] = mapped_column(String(20), default="manual", nullable=False)  # manual, faq, url, pdf, docx, txt
+    source_type: Mapped[str] = mapped_column(String(20), default="manual", nullable=False)  # manual, faq, url, pdf, docx, txt, md, csv, xlsx
     content_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     source_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="ready", nullable=False)  # processing, ready, failed
+
+    # document = informazioni (FAQ, listini, schede prodotto...); instruction =
+    # come il bot deve comportarsi ("se chiedono un preventivo, chiedi...");
+    # profile = scheda di un'azienda, generata dai suoi dati e mai mostrata
+    # nell'elenco (vedi OmniKnowledgeCompany).
+    kind: Mapped[str] = mapped_column(String(20), default="document", nullable=False)
+    # Solo per le istruzioni: sempre nel prompt di sistema invece che recuperata
+    # dalla ricerca quando pertinente. Costa token a ogni risposta, quindi e'
+    # per regole brevi e generali.
+    always_on: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Cartella del documento (vedi OmniKnowledgeCompany). NULL = vale per tutte
+    # le aziende. Il nome dell'azienda finisce nell'intestazione di ogni blocco,
+    # cosi' il modello sa di chi e' un prezzo o una policy.
+    company_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("omni_knowledge_companies.id", ondelete="SET NULL"), nullable=True, index=True)
+    file_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Ultimo problema non bloccante (es. embedding non calcolati per credito
+    # OpenAI esaurito: il documento resta cercabile per testo).
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
     chunks: Mapped[List["OmniKnowledgeChunk"]] = relationship("OmniKnowledgeChunk", back_populates="document", cascade="all, delete-orphan")
+    company_ref: Mapped[Optional["OmniKnowledgeCompany"]] = relationship("OmniKnowledgeCompany", back_populates="documents", lazy="joined")
+
+    @property
+    def company(self) -> Optional[str]:
+        return self.company_ref.name if self.company_ref else None
+
+
+class OmniKnowledgeCompany(Base):
+    """
+    Azienda della Knowledge Base: fa da cartella per i suoi documenti e
+    istruzioni, e i suoi dati (contatti, descrizione) diventano una "scheda
+    azienda" cercabile come un documento qualsiasi - un documento nascosto con
+    kind="profile", vedi knowledge.sync_company_profile(). Cosi' "qual e' il
+    vostro numero?" trova il telefono senza aggiungere token a ogni risposta.
+    """
+    __tablename__ = "omni_knowledge_companies"
+    __table_args__ = (UniqueConstraint("owner_id", "name", name="uq_omni_knowledge_company_owner_name"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("administrators.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    website: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Note interne per l'operatore: non vanno al bot.
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    documents: Mapped[List[OmniKnowledgeDocument]] = relationship("OmniKnowledgeDocument", back_populates="company_ref", passive_deletes=True)
 
 
 class OmniKnowledgeChunk(Base):
@@ -298,6 +360,13 @@ class OmniKnowledgeChunk(Base):
 
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # "Azienda: X | Documento: Y" - entra nell'embedding e nella ricerca
+    # testuale (indice GIN su heading || content, vedi migrazione b7e2d91c4a18).
+    heading: Mapped[Optional[str]] = mapped_column(String(600), nullable=True)
+    # float32 * EMBEDDING_DIMENSIONS, normalizzato. NULL = da calcolare.
+    embedding: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    embedding_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    embedded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
@@ -314,7 +383,6 @@ class OmniTag(Base):
     owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("administrators.id", ondelete="CASCADE"), nullable=False, index=True)
 
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    color: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 

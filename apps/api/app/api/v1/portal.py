@@ -35,8 +35,13 @@ from app.models.buffer import BufferConnection, BufferOrganization, SocialChanne
 from app.models.campaign import Campaign, CampaignParticipant, CampaignTarget
 from app.models.publication import Publication
 from app.models.statistics import StatPostMetric
-from app.models.user import User
-from app.services import campaign_participation, user_activation
+from app.models.user import User, UserGroup
+from app.services import (
+    auth_tokens,
+    campaign_participation,
+    portal_emails,
+    user_activation,
+)
 
 router = APIRouter()
 
@@ -67,17 +72,71 @@ class PortalTokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=10, max_length=512)
+    password: str = Field(min_length=10, max_length=200)
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str = Field(min_length=10, max_length=512)
+
+
+class SimpleMessageResponse(BaseModel):
+    """Esito di un'azione che non restituisce dati, solo una frase da mostrare."""
+
+    detail: str
+
+
 class PortalUserResponse(BaseModel):
     id: str
     name: str
     email: str
     company_name: Optional[str]
     status: str
+    city: Optional[str]
+    postal_code: Optional[str]
+    # Falso finche' l'utente non ha compilato la finestra obbligatoria (citta',
+    # CAP, gruppi). Il layout del portale si ferma qui dopo la conferma email;
+    # l'API fa lo stesso in get_verified_portal_user.
+    profile_completed: bool
+    group_ids: List[str]
     # False until an administrator activates the account. The dashboard uses it
     # to explain why a freshly registered user is not in any campaign yet.
     is_active_for_campaigns: bool
+    # Falso finche' l'utente non ha cliccato il link dell'email di benvenuto. Il
+    # portale si blocca su questo: e' l'unico campo che la schermata di attesa
+    # interroga, e /me resta raggiungibile anche da non confermati proprio per
+    # poterglielo dire.
+    email_verified: bool
+    privacy_accepted: bool
+    # Se gli e' gia' stata spedita almeno un'email di conferma. La finestra di
+    # attesa lo usa per non dire "ti abbiamo scritto" a chi era iscritto prima
+    # della conferma e non ha ancora ricevuto niente: a lui propone l'invio.
+    verification_email_sent: bool
     referral_link: Optional[str]
     created_at: datetime
+
+
+class PortalGroupResponse(BaseModel):
+    """Un gruppo di partecipazione, come lo vede chi deve sceglierne uno."""
+    id: str
+    name: str
+    description: Optional[str]
+
+
+class PortalProfileRequest(BaseModel):
+    """
+    La finestra obbligatoria del primo accesso. Almeno un gruppo: un promoter
+    fuori da ogni gruppo non verrebbe mai raggiunto dalle campagne mirate, e
+    la finestra esiste proprio per evitarlo.
+    """
+    city: str = Field(min_length=2, max_length=120)
+    postal_code: str = Field(min_length=3, max_length=20, pattern=r"^[A-Za-z0-9][A-Za-z0-9 \-]{1,18}[A-Za-z0-9]$")
+    group_ids: List[uuid.UUID] = Field(min_length=1, max_length=100)
 
 
 class PortalChannelResponse(BaseModel):
@@ -189,6 +248,72 @@ def get_current_portal_user(
     return user
 
 
+def _portal_unlocked(user: User) -> bool:
+    """
+    Indirizzo confermato e privacy accettata: le due cose che aprono il portale.
+
+    Di solito arrivano insieme (lo stesso clic sull'email di conferma), ma non
+    sempre: il reset della password conferma l'indirizzo e non la privacy,
+    perche' quell'email non la menziona. Guardarne una sola lascerebbe entrare
+    un utente di prima della conferma che ha solo cambiato password.
+    """
+    return user.email_verified_at is not None and user.privacy_accepted_at is not None
+
+
+def get_unlocked_portal_user(
+    current_user: User = Depends(get_current_portal_user),
+) -> User:
+    """
+    Indirizzo confermato e privacy accettata, profilo non ancora richiesto.
+
+    E' il gradino intermedio che serve alla finestra del primo accesso: per
+    compilarla l'utente deve poter leggere i gruppi e salvare il profilo, ma
+    non deve poter fare nient'altro. Solo ``/groups`` e ``/profile`` stanno
+    qui; tutto il resto passa da ``get_verified_portal_user``.
+    """
+    if not _portal_unlocked(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="email_not_verified",
+        )
+    return current_user
+
+
+def get_verified_portal_user(
+    current_user: User = Depends(get_current_portal_user),
+) -> User:
+    """
+    Come sopra, ma solo se l'indirizzo e' confermato, la privacy accettata e
+    il profilo del primo accesso compilato (citta', CAP, gruppi).
+
+    E' questa la dipendenza che usa tutto il portale: la finestra di attesa che
+    il browser mostra a chi non ha ancora cliccato il link e' comodita', non un
+    controllo - vive nel client e chiunque puo' aggirarla chiamando l'API da
+    fuori. Il blocco vero e' qui, un gradino sotto ogni rotta.
+
+    Le uniche due eccezioni sono ``/me``, che serve proprio per sapere che si e'
+    in attesa, e il rinvio dell'email: entrambe dipendono da
+    ``get_current_portal_user``. Tutto il resto passa di qua.
+
+    I codici 403 con ``email_not_verified`` e ``profile_incomplete`` sono quelli
+    su cui il portale riconosce la situazione senza dover interpretare un
+    messaggio. Il secondo vale anche per chi era iscritto prima che la finestra
+    esistesse: citta', CAP e gruppi servono da tutti, e non li abbiamo per
+    nessuno.
+    """
+    if not _portal_unlocked(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="email_not_verified",
+        )
+    if current_user.profile_completed_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="profile_incomplete",
+        )
+    return current_user
+
+
 @router.post("/auth/register", response_model=PortalTokenResponse, status_code=status.HTTP_201_CREATED)
 def register(payload: PortalRegisterRequest, db: Session = Depends(get_db)):
     """
@@ -235,6 +360,11 @@ def register(payload: PortalRegisterRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
+    # L'email parte dopo il commit e non puo' far fallire la registrazione: se
+    # non parte, l'utente entra lo stesso e trova la schermata di attesa, da cui
+    # puo' chiederne un'altra. Vedi services/portal_emails.py.
+    portal_emails.send_welcome_verification(db, user)
+
     return PortalTokenResponse(
         access_token=SecurityService.create_access_token(
             subject=user.id, token_type=TOKEN_TYPE_PORTAL_USER
@@ -276,17 +406,234 @@ def login(payload: PortalLoginRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/me", response_model=PortalUserResponse)
-def get_me(current_user: User = Depends(get_current_portal_user)):
+def get_me(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_portal_user),
+):
+    return _me_payload(db, current_user)
+
+
+def _me_payload(db: Session, user: User) -> PortalUserResponse:
     return PortalUserResponse(
-        id=str(current_user.id),
-        name=current_user.name,
-        email=current_user.email,
-        company_name=current_user.company_name,
-        status=current_user.status,
-        is_active_for_campaigns=current_user.status == "active",
-        referral_link=current_user.referral_link,
-        created_at=current_user.created_at,
+        id=str(user.id),
+        name=user.name,
+        email=user.email,
+        company_name=user.company_name,
+        status=user.status,
+        city=user.city,
+        postal_code=user.postal_code,
+        profile_completed=user.profile_completed_at is not None,
+        group_ids=[str(group.id) for group in user.groups],
+        is_active_for_campaigns=user.status == "active",
+        email_verified=user.email_verified_at is not None,
+        privacy_accepted=user.privacy_accepted_at is not None,
+        verification_email_sent=auth_tokens.verification_sent(db, user),
+        referral_link=user.referral_link,
+        created_at=user.created_at,
     )
+
+
+# --------------------------------------------------------------------------
+# Profilo del primo accesso: citta', CAP e gruppi di partecipazione
+# --------------------------------------------------------------------------
+
+@router.get("/groups", response_model=List[PortalGroupResponse])
+def list_groups(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_unlocked_portal_user),
+):
+    """
+    Tutti i gruppi di partecipazione, perche' l'utente scelga i suoi.
+
+    Raggiungibile a profilo incompleto - e' il momento in cui serve - ma solo
+    dopo la conferma dell'indirizzo: non e' un elenco pubblico.
+    """
+    groups = db.query(UserGroup).order_by(UserGroup.name).all()
+    return [
+        PortalGroupResponse(id=str(group.id), name=group.name, description=group.description)
+        for group in groups
+    ]
+
+
+@router.post("/profile", response_model=PortalUserResponse)
+def save_profile(
+    payload: PortalProfileRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_unlocked_portal_user),
+):
+    """
+    Salva citta', CAP e gruppi, e sblocca il portale.
+
+    I gruppi scelti **sostituiscono** quelli dell'utente: e' la sua scelta, e la
+    finestra mostra sempre lo stato completo. Un gruppo inesistente e' un 422,
+    non un salvataggio parziale - la selezione arriva da un elenco che abbiamo
+    appena servito, quindi un id sconosciuto e' un errore e non un caso.
+    ``profile_completed_at`` si imposta la prima volta e non si tocca piu':
+    e' la data della prima compilazione, non dell'ultima modifica.
+    """
+    wanted = list(dict.fromkeys(payload.group_ids))
+    groups = db.query(UserGroup).filter(UserGroup.id.in_(wanted)).all()
+    if len(groups) != len(wanted):
+        raise HTTPException(status_code=422, detail="Uno dei gruppi scelti non esiste più. Ricarica e riprova.")
+
+    current_user.city = payload.city.strip()
+    current_user.postal_code = payload.postal_code.strip().upper()
+    current_user.groups = groups
+    if current_user.profile_completed_at is None:
+        current_user.profile_completed_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(current_user)
+    return _me_payload(db, current_user)
+
+
+@router.post("/auth/verify-email", response_model=PortalTokenResponse)
+def verify_email(payload: VerifyEmailRequest, db: Session = Depends(get_db)):
+    """
+    Conferma l'indirizzo con il token ricevuto per email, e apre la sessione.
+
+    Restituisce un token di accesso di proposito: chi clicca il link nella posta
+    ha appena dimostrato di controllare quell'indirizzo, e spesso lo apre su un
+    dispositivo diverso da quello della registrazione. Rimandarlo a un modulo di
+    accesso dopo aver fatto quello che gli avevamo chiesto sarebbe un passaggio
+    in piu' a vuoto - il link e' monouso e scade, quindi come prova vale quanto
+    una password appena inserita.
+
+    Lo stesso clic vale come accettazione di informativa e termini: il testo
+    dell'email lo dichiara e linka entrambi sopra il pulsante (vedi
+    services/email/templates.py), percio' le due date si scrivono insieme.
+    """
+    user = auth_tokens.consume(db, payload.token, auth_tokens.PURPOSE_EMAIL_VERIFICATION)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Link non valido o scaduto. Accedi e chiedine uno nuovo.",
+        )
+
+    if user.status == "suspended":
+        raise HTTPException(status_code=403, detail="Account sospeso. Contatta l'amministratore.")
+
+    now = datetime.now(timezone.utc)
+    # Un secondo clic sullo stesso link non arriva qui (il token e' bruciato),
+    # ma un utente puo' confermare, cambiare idea e riconfermare con un link
+    # nuovo: la prima data resta, perche' e' quella il fatto.
+    if user.email_verified_at is None:
+        user.email_verified_at = now
+    if user.privacy_accepted_at is None:
+        user.privacy_accepted_at = now
+    user.last_login_at = now
+    db.commit()
+
+    return PortalTokenResponse(
+        access_token=SecurityService.create_access_token(
+            subject=user.id, token_type=TOKEN_TYPE_PORTAL_USER
+        )
+    )
+
+
+@router.post("/auth/resend-verification", response_model=SimpleMessageResponse)
+def resend_verification(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_portal_user),
+):
+    """
+    Rimanda l'email di conferma all'utente collegato.
+
+    Dipende dall'utente autenticato e non da un indirizzo nel corpo: cosi'
+    l'endpoint non puo' essere usato per mandare posta a caselle altrui, e non
+    serve nessun altro controllo sul destinatario.
+    """
+    if _portal_unlocked(current_user):
+        return SimpleMessageResponse(detail="Il tuo indirizzo è già confermato.")
+
+    if not portal_emails.send_welcome_verification(db, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Hai già chiesto diverse email di conferma nell'ultima ora. "
+                "Controlla anche la posta indesiderata e riprova più tardi."
+            ),
+        )
+
+    return SimpleMessageResponse(
+        detail=f"Ti abbiamo inviato una nuova email a {current_user.email}."
+    )
+
+
+@router.post(
+    "/auth/forgot-password",
+    response_model=SimpleMessageResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    """
+    Avvia il recupero della password.
+
+    Risponde sempre allo stesso modo, che l'indirizzo esista o no. Altrimenti
+    questo endpoint diventerebbe un modo per sapere chi ha un account da noi -
+    la stessa ragione per cui l'accesso non distingue email sconosciuta da
+    password sbagliata, poche righe piu' su.
+
+    Per lo stesso motivo il limite di frequenza superato non e' un errore
+    visibile: da fuori, chiedere il reset dieci volte di fila deve sembrare
+    identico a chiederlo una volta sola.
+    """
+    email = payload.email.lower().strip()
+    user = db.query(User).filter(
+        func.lower(User.email) == email,
+        User.deleted_at.is_(None),
+    ).first()
+
+    # Niente password = account creato da un amministratore e mai rivendicato:
+    # non c'e' nessuna password da reimpostare, e la strada giusta e' la
+    # registrazione. Anche qui, silenzio.
+    if user and user.password_hash and user.status != "suspended":
+        portal_emails.send_password_reset(db, user)
+
+    return SimpleMessageResponse(
+        detail=(
+            "Se esiste un account con questo indirizzo, ti abbiamo inviato "
+            "un'email con il link per reimpostare la password."
+        )
+    )
+
+
+@router.post("/auth/reset-password", response_model=SimpleMessageResponse)
+def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
+    """
+    Imposta la nuova password a partire dal token ricevuto per email.
+
+    Conferma anche l'indirizzo, se non lo era: l'utente ha appena letto un
+    messaggio arrivato li'. Chiedergli di fare due volte la stessa prova
+    significherebbe lasciarlo bloccato fuori dal portale subito dopo avergli
+    fatto scegliere una password nuova.
+
+    La privacy invece no: l'email di reset non la nomina, e un consenso dato
+    senza aver visto cosa si accetta non e' un consenso. Chi non l'aveva ancora
+    accettata - tipicamente un iscritto di prima della conferma - entra e trova
+    la finestra che gliela chiede.
+    """
+    user = auth_tokens.consume(db, payload.token, auth_tokens.PURPOSE_PASSWORD_RESET)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Link non valido o scaduto. Richiedi un nuovo reset.",
+        )
+
+    if user.status == "suspended":
+        raise HTTPException(status_code=403, detail="Account sospeso. Contatta l'amministratore.")
+
+    now = datetime.now(timezone.utc)
+    user.password_hash = SecurityService.hash_password(payload.password)
+    if user.email_verified_at is None:
+        user.email_verified_at = now
+
+    # Anche l'eventuale link di conferma ancora in giro viene spento: la
+    # richiesta di reset e' andata a buon fine, e ogni altro link vivo su questo
+    # account e' solo un modo in piu' per entrarci.
+    auth_tokens.invalidate_pending(db, user)
+    db.commit()
+
+    return SimpleMessageResponse(detail="Password aggiornata. Ora puoi accedere.")
 
 
 # --------------------------------------------------------------------------
@@ -314,7 +661,7 @@ def _user_channels_query(db: Session, user: User):
 @router.get("/channels", response_model=List[PortalChannelResponse])
 def list_my_channels(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     channels = _user_channels_query(db, current_user).order_by(SocialChannel.platform).all()
     return [
@@ -350,7 +697,7 @@ def list_my_channels(
 @router.get("/campaigns", response_model=List[PortalCampaignResponse])
 def list_my_campaigns(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """
     Campaigns this user takes part in, with their own outcome only.
@@ -461,7 +808,7 @@ def list_my_campaigns(
 @router.get("/stats", response_model=PortalStatsResponse)
 def get_my_stats(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """
     Headline figures for the user's own dashboard.
@@ -559,7 +906,7 @@ CONNECTABLE_PLATFORMS = [
 
 
 @router.get("/connect/platforms", response_model=List[str])
-def list_connectable_platforms(current_user: User = Depends(get_current_portal_user)):
+def list_connectable_platforms(current_user: User = Depends(get_verified_portal_user)):
     return CONNECTABLE_PLATFORMS
 
 
@@ -567,7 +914,7 @@ def list_connectable_platforms(current_user: User = Depends(get_current_portal_u
 def create_connect_link(
     payload: ConnectLinkRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """
     Start the hosted OAuth flow.
@@ -661,7 +1008,7 @@ class ConnectSyncResponse(BaseModel):
 def sync_my_channels(
     force: bool = False,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """
     Import the channels the user just authorised.
@@ -737,7 +1084,7 @@ class PortalOverviewResponse(BaseModel):
 @router.get("/overview", response_model=PortalOverviewResponse)
 def get_my_overview(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """
     Dashboard payload: headline figures, a 30-day publishing timeline, and the
@@ -810,7 +1157,7 @@ def get_my_overview(
 def remove_my_channel(
     channel_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """
     Remove a channel the user no longer uses from their list.
@@ -1020,7 +1367,7 @@ def _lineup_payload(
 @router.get("/lineup", response_model=List[PortalLineupCampaign])
 def list_lineup(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """
     Every campaign currently open for participation - including ones this user
@@ -1099,7 +1446,7 @@ def list_lineup(
 def get_lineup_campaign(
     campaign_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """
     One campaign in full: its text, its media, when it goes out, and this user's
@@ -1180,7 +1527,7 @@ def withdraw_from_campaign(
     campaign_id: uuid.UUID,
     payload: PortalParticipationRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """
     Take this user's channels out of a campaign before it is launched.
@@ -1222,7 +1569,7 @@ def join_campaign(
     campaign_id: uuid.UUID,
     payload: PortalParticipationRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_portal_user),
+    current_user: User = Depends(get_verified_portal_user),
 ):
     """
     Put this user's own channels into an open campaign.
