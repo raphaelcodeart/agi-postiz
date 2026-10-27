@@ -197,7 +197,8 @@ class OmniAIDraft(Base):
     # can later be mined as a feedback signal for prompt/KB improvements.
     edited_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # GENERATING, PENDING_APPROVAL, EDITED, APPROVED, SENDING, SENT, REJECTED, FAILED, HUMAN_REVIEW_REQUIRED
+    # GENERATING, PENDING_APPROVAL, EDITED, APPROVED, SENDING, SENT, REJECTED, FAILED, HUMAN_REVIEW_REQUIRED,
+    # SUPERSEDED (archiviata perche' il cliente ha riscritto o esiste una bozza piu' recente, vedi draft service)
     status: Mapped[str] = mapped_column(String(30), default="GENERATING", nullable=False)
     model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     prompt_version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)

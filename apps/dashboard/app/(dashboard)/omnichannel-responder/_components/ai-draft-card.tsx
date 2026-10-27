@@ -35,7 +35,7 @@ export function AIDraftCard({ conversationId, draft }: { conversationId: string;
   const isBusy = approveDraft.isPending || regenerateDraft.isPending || rejectDraft.isPending || editDraft.isPending;
   const isGenerating = draft.status === "GENERATING";
   const isFailed = draft.status === "FAILED";
-  const isTerminal = ["SENT", "REJECTED"].includes(draft.status);
+  const isTerminal = ["SENT", "REJECTED", "SUPERSEDED"].includes(draft.status);
   const isDirty = text !== (draft.edited_text ?? draft.original_ai_text ?? "");
 
   function handleApprove() {

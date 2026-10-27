@@ -216,6 +216,14 @@ class OmnichannelService:
             status="received",
         )
         db.add(message)
+        db.flush()
+
+        # Le bozze ancora da approvare rispondevano al messaggio precedente:
+        # si archiviano (SUPERSEDED), altrimenti l'Inbox le riproporrebbe
+        # come risposta al nuovo messaggio. Import locale: il servizio bozze
+        # importa questo modulo a livello di modulo.
+        from app.services.omnichannel_draft_service import SUPERSEDED_BY_CUSTOMER, OmnichannelDraftService
+        OmnichannelDraftService.supersede_open_drafts(db, conversation.id, SUPERSEDED_BY_CUSTOMER)
 
         now = datetime.now(timezone.utc)
         conversation.last_message_at = now

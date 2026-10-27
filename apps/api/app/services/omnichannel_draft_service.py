@@ -43,6 +43,15 @@ _APPROVABLE_STATUSES = {"PENDING_APPROVAL", "EDITED", "HUMAN_REVIEW_REQUIRED"}
 # time, transient OpenAI error) - it just can't be edited or sent directly,
 # only regenerated from scratch.
 _REGENERATABLE_STATUSES = _APPROVABLE_STATUSES | {"FAILED"}
+# Una bozza "aperta" e' una proposta ancora in mano all'operatore. Quando il
+# cliente scrive di nuovo, o quando nasce una bozza piu' recente, quella
+# vecchia risponde a un messaggio superato: diventa SUPERSEDED, cosi' l'Inbox
+# non la ripropone come se fosse appena generata (succedeva, e sembrava che
+# l'AI generasse da sola anche con auto_generate_draft spento). GENERATING e'
+# escluso: il task che la sta producendo ne riscrive lo stato alla fine.
+_OPEN_STATUSES = _APPROVABLE_STATUSES | {"FAILED"}
+SUPERSEDED_BY_CUSTOMER = "Il cliente ha scritto di nuovo: la bozza rispondeva a un messaggio precedente"
+SUPERSEDED_BY_NEW_DRAFT = "Sostituita da una bozza piu' recente"
 
 # Very rough gpt-4o-mini-class pricing used only for the cost-tracking
 # dashboard (spec section 69/33) - not tied to billing/enforcement of any kind.
@@ -56,6 +65,26 @@ def _estimate_cost(input_tokens: int, output_tokens: int) -> float:
 
 class OmnichannelDraftService:
     @staticmethod
+    def supersede_open_drafts(db: Session, conversation_id: uuid.UUID, reason: str, except_id: Optional[uuid.UUID] = None) -> int:
+        """
+        Archivia le bozze ancora aperte di una conversazione (vedi
+        _OPEN_STATUSES). Non invia e non cancella nulla: la bozza resta nello
+        storico con il motivo in failure_reason, ma non e' piu' approvabile.
+        Non fa commit: lo fa il chiamante insieme al resto della sua
+        transazione. Restituisce quante ne ha archiviate.
+        """
+        query = db.query(OmniAIDraft).filter(OmniAIDraft.conversation_id == conversation_id, OmniAIDraft.status.in_(_OPEN_STATUSES))
+        if except_id is not None:
+            query = query.filter(OmniAIDraft.id != except_id)
+        count = 0
+        for draft in query.all():
+            draft.status = "SUPERSEDED"
+            draft.failure_reason = reason
+            OmnichannelService.log_audit(db, draft.owner_id, None, "AI_SUPERSEDED", "ai_draft", draft.id, {"reason": reason})
+            count += 1
+        return count
+
+    @staticmethod
     def generate_draft_for_message(db: Session, message_id: uuid.UUID) -> Optional[OmniAIDraft]:
         message = db.query(OmniMessage).filter(OmniMessage.id == message_id).first()
         if not message:
@@ -66,6 +95,10 @@ class OmnichannelDraftService:
 
         draft = OmniAIDraft(owner_id=owner_id, conversation_id=conversation.id, source_message_id=message.id, status="GENERATING")
         db.add(draft)
+        db.flush()
+        # Una sola proposta attiva per conversazione: quelle rimaste aperte
+        # (es. generate a mano prima che il cliente riscrivesse) si archiviano.
+        OmnichannelDraftService.supersede_open_drafts(db, conversation.id, SUPERSEDED_BY_NEW_DRAFT, except_id=draft.id)
         db.commit()
         db.refresh(draft)
 

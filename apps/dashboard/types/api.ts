@@ -771,7 +771,9 @@ export type OmniDraftStatus =
   | "SENT"
   | "REJECTED"
   | "FAILED"
-  | "HUMAN_REVIEW_REQUIRED";
+  | "HUMAN_REVIEW_REQUIRED"
+  /** Archiviata: il cliente ha scritto di nuovo o esiste una bozza piu' recente. Non approvabile. */
+  | "SUPERSEDED";
 
 export interface OmniChannelAccountResponse {
   id: string;

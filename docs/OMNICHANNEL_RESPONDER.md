@@ -155,11 +155,11 @@ La proposta di risposta generata dall'AI — il cuore del workflow "human-in-the
 | `source_message_id` | UUID, nullable (FK → omni_messages, `SET NULL`) | il messaggio del cliente che ha innescato la generazione |
 | `original_ai_text` | text, nullable | **mai sovrascritto** da una modifica dell'operatore — conservato per un futuro confronto/analisi (spec "feedback loop") |
 | `edited_text` | text, nullable | testo modificato dall'operatore, se diverso dall'originale |
-| `status` | string | `GENERATING`, `PENDING_APPROVAL`, `EDITED`, `APPROVED`, `SENDING`, `SENT`, `REJECTED`, `FAILED`, `HUMAN_REVIEW_REQUIRED` |
+| `status` | string | `GENERATING`, `PENDING_APPROVAL`, `EDITED`, `APPROVED`, `SENDING`, `SENT`, `REJECTED`, `FAILED`, `HUMAN_REVIEW_REQUIRED`, `SUPERSEDED`. **`SUPERSEDED`** (dal 2026-10-27): bozza archiviata perché il cliente ha scritto di nuovo (`OmnichannelService.ingest_message` → `OmnichannelDraftService.supersede_open_drafts`) o perché ne è nata una più recente (`generate_draft_for_message`). Vale per `PENDING_APPROVAL`/`EDITED`/`HUMAN_REVIEW_REQUIRED`/`FAILED`, non per `GENERATING` (il task la riscrive a fine lavoro) né per `SENT`/`REJECTED`. Non è approvabile, modificabile né rigenerabile; il motivo è in `failure_reason`; audit `AI_SUPERSEDED`. Prima una bozza di ieri restava "da approvare" e la chat la riproponeva al nuovo messaggio di oggi: sembrava che l'AI generasse da sola anche con `auto_generate_draft` spento (segnalazione reale, 2026-10-27). Il frontend (`chat-panel.tsx`) la esclude dalla bozza attiva, quindi il bottone "Genera risposta AI" torna disponibile. |
 | `model`, `prompt_version` | string, nullable | |
 | `confidence_score` | float, nullable | riservato per uso futuro, non popolato in questa v1 |
 | `sensitive_category` | string, nullable | valorizzato se il messaggio del cliente tocca un argomento sensibile (rimborso, legale, medico...) — vedi §6 |
-| `failure_reason` | text, nullable | motivo se `status = FAILED` (es. nessuna API key OpenAI configurata) |
+| `failure_reason` | text, nullable | motivo se `status = FAILED` (es. nessuna API key OpenAI configurata) o `SUPERSEDED` (perché è stata archiviata) |
 | `approved_at`, `approved_by` (FK → administrators, `SET NULL`), `sent_at` | | |
 
 **La AI non ha mai un percorso di codice che invia un messaggio.** Solo `OmnichannelDraftService.approve_and_send`, chiamato da un endpoint autenticato dopo un'azione esplicita dell'operatore, chiama `Connector.send_message`.
@@ -200,7 +200,7 @@ Tag liberi (es. `VIP`, `RECLAMO`, `LEAD`) applicabili alle conversazioni. `omni_
 Note interne su una conversazione, mai visibili/inviate al cliente — renderizzate nella chat con uno stile visivamente distinto (bordo tratteggiato, sfondo diverso).
 
 ### `omni_audit_logs`
-Log di audit **separato** da `audit_logs` esistente (questo modulo non scrive mai in quella tabella). Stesso spirito: `action`, `entity_type`, `entity_id`, `metadata_json`, `admin_id` (FK `SET NULL`). Azioni registrate: `AI_GENERATED`, `AI_GENERATION_FAILED`, `AI_EDITED`, `AI_REGENERATED`, `AI_APPROVED`, `AI_REJECTED`, `MESSAGE_SENT`, `MESSAGE_FAILED`, `ASSIGNMENT_CHANGED`, `CUSTOMER_UPDATED`, `SETTINGS_CHANGED`, e per il CRM (§6-bis) `CRM_KEY_CHANGED`, `CRM_TOGGLED`, `CRM_PROFILE_VIEWED`.
+Log di audit **separato** da `audit_logs` esistente (questo modulo non scrive mai in quella tabella). Stesso spirito: `action`, `entity_type`, `entity_id`, `metadata_json`, `admin_id` (FK `SET NULL`). Azioni registrate: `AI_GENERATED`, `AI_GENERATION_FAILED`, `AI_EDITED`, `AI_REGENERATED`, `AI_SUPERSEDED`, `AI_APPROVED`, `AI_REJECTED`, `MESSAGE_SENT`, `MESSAGE_FAILED`, `ASSIGNMENT_CHANGED`, `CUSTOMER_UPDATED`, `SETTINGS_CHANGED`, e per il CRM (§6-bis) `CRM_KEY_CHANGED`, `CRM_TOGGLED`, `CRM_PROFILE_VIEWED`.
 
 ### `omni_notifications`
 Notifiche in-app, lette via polling (`GET /notifications`, ogni 15s lato frontend). `admin_id` nullable = notifica broadcast a tutti gli amministratori di quell'`owner_id`.

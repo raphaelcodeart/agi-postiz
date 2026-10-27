@@ -29,7 +29,10 @@ export function ChatPanel({ conversationId, onDeleted }: { conversationId: strin
   const deleteConversation = useDeleteConversation();
   const generateDraft = useGenerateDraft(conversationId ?? "");
 
-  const activeDraft = conversation ? [...conversation.drafts].reverse().find((d) => !["SENT", "REJECTED"].includes(d.status)) : undefined;
+  // Una bozza SUPERSEDED rispondeva a un messaggio ormai superato (il cliente
+  // ha riscritto): non e' piu' "attiva", quindi il bottone "Genera risposta
+  // AI" torna disponibile invece di riproporre il testo vecchio.
+  const activeDraft = conversation ? [...conversation.drafts].reverse().find((d) => !["SENT", "REJECTED", "SUPERSEDED"].includes(d.status)) : undefined;
   const lastMessage = conversation?.messages[conversation.messages.length - 1];
 
   // Opening a conversation (or receiving a new message / AI draft / note while
