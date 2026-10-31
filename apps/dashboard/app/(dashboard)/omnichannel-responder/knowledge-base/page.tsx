@@ -1,13 +1,15 @@
 "use client";
 
-import { useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ChangeEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   BookOpenIcon,
   Building2Icon,
+  CloudUploadIcon,
   FileTextIcon,
   FlaskConicalIcon,
   FolderIcon,
+  FolderInputIcon,
   FolderOpenIcon,
   GlobeIcon,
   InboxIcon,
@@ -36,6 +38,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -291,11 +294,63 @@ export default function OmnichannelKnowledgeBasePage() {
   const folderTitle = currentCompany ? currentCompany.name : folder === NONE ? "Senza azienda" : "Tutte le aziende";
   const scopeLabel = currentCompany ? currentCompany.name : folder === NONE ? '"Senza azienda"' : "tutte le aziende";
 
+  // Lo strumento di ricerca sta subito sopra l'elenco, in ogni scheda: filtra
+  // (o cerca) quello che c'e' sotto, non altro.
+  const searchToolbar = (
+      <div className="space-y-1.5">
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="relative flex-1">
+            <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="pr-9 pl-8"
+              value={textFilter}
+              onChange={(e) => setTextFilter(e.target.value)}
+              onKeyDown={onSearchKeyDown}
+              aria-label={searchMode === "quick" ? "Filtra l'elenco" : "Ricerca avanzata"}
+              placeholder={
+                searchMode === "quick"
+                  ? `Filtra per titolo, file o parole nel testo in ${scopeLabel}...`
+                  : `Nome di un file o argomento da cercare in ${scopeLabel}, poi Invio...`
+              }
+            />
+            {(isFetching && !isLoading) || find.isFetching ? (
+              <Loader2Icon className="absolute top-1/2 right-2.5 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />
+            ) : textFilter ? (
+              <button
+                type="button"
+                onClick={clearSearch}
+                aria-label="Svuota la ricerca"
+                className="absolute top-1/2 right-1.5 flex size-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <XIcon className="size-4" />
+              </button>
+            ) : null}
+          </div>
+          <div className="flex gap-2">
+            <div role="group" aria-label="Tipo di ricerca" className="inline-flex h-9 rounded-md border bg-background p-0.5">
+              <ModeButton active={searchMode === "quick"} onClick={() => switchMode("quick")} icon={SearchIcon} label="Rapida" />
+              <ModeButton active={searchMode === "deep"} onClick={() => switchMode("deep")} icon={SparklesIcon} label="Avanzata" />
+            </div>
+            {searchMode === "deep" && (
+              <Button className="h-9" onClick={runDeepSearch} disabled={find.isFetching || textFilter.trim().length < MIN_DEEP_QUERY}>
+                {find.isFetching ? <Loader2Icon className="animate-spin" /> : <SearchIcon />} Cerca
+              </Button>
+            )}
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {searchMode === "quick"
+            ? "Filtra l'elenco mentre scrivi. Per trovare i file che parlano di un argomento, anche con parole diverse, passa ad Avanzata."
+            : "Trova i file per nome e quelli in cui si parla di quello che scrivi, anche con parole diverse: è lo stesso motore che usa il bot. Premi Invio o Cerca."}
+        </p>
+      </div>
+  );
+
   return (
     <div>
       <PageHeader
         title="Knowledge Base"
-        description="Documenti, listini e istruzioni da cui il bot prende le risposte, ordinati per azienda. A ogni messaggio arrivano al modello solo i pezzi pertinenti, così il costo resta basso anche con molte informazioni."
+        description="Documenti, listini e istruzioni da cui il bot prende le risposte, ordinati per azienda. A ogni messaggio il bot legge solo i pezzi pertinenti."
       />
 
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -370,56 +425,13 @@ export default function OmnichannelKnowledgeBasePage() {
               <TabsTrigger value="test"><FlaskConicalIcon /> Prova il bot</TabsTrigger>
             </TabsList>
 
-            <div className="mt-4 space-y-2">
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <div className="relative flex-1">
-                  <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    className="pr-9 pl-8"
-                    value={textFilter}
-                    onChange={(e) => setTextFilter(e.target.value)}
-                    onKeyDown={onSearchKeyDown}
-                    aria-label={searchMode === "quick" ? "Filtra l'elenco" : "Ricerca avanzata"}
-                    placeholder={
-                      searchMode === "quick"
-                        ? `Filtra per titolo, file o parole nel testo in ${scopeLabel}...`
-                        : `Nome di un file o argomento da cercare in ${scopeLabel}, poi Invio...`
-                    }
-                  />
-                  {(isFetching && !isLoading) || find.isFetching ? (
-                    <Loader2Icon className="absolute top-1/2 right-2.5 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />
-                  ) : textFilter ? (
-                    <button
-                      type="button"
-                      onClick={clearSearch}
-                      aria-label="Svuota la ricerca"
-                      className="absolute top-1/2 right-1.5 flex size-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
-                    >
-                      <XIcon className="size-4" />
-                    </button>
-                  ) : null}
-                </div>
-                <div className="flex gap-2">
-                  <div role="group" aria-label="Tipo di ricerca" className="inline-flex h-9 rounded-md border bg-background p-0.5">
-                    <ModeButton active={searchMode === "quick"} onClick={() => switchMode("quick")} icon={SearchIcon} label="Rapida" />
-                    <ModeButton active={searchMode === "deep"} onClick={() => switchMode("deep")} icon={SparklesIcon} label="Avanzata" />
-                  </div>
-                  {searchMode === "deep" && (
-                    <Button className="h-9" onClick={runDeepSearch} disabled={find.isFetching || textFilter.trim().length < MIN_DEEP_QUERY}>
-                      {find.isFetching ? <Loader2Icon className="animate-spin" /> : <SearchIcon />} Cerca
-                    </Button>
-                  )}
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {searchMode === "quick"
-                  ? "Filtra l'elenco mentre scrivi. Per trovare i file che parlano di un argomento, anche con parole diverse, passa ad Avanzata."
-                  : "Trova i file per nome e quelli in cui si parla di quello che scrivi, anche con parole diverse: è lo stesso motore che usa il bot. Premi Invio o Cerca."}
-              </p>
-            </div>
-
             <TabsContent value="documents" className="mt-4 space-y-4">
-              <div
+              <UploadCard
+                companies={companies}
+                target={uploadTarget}
+                onTarget={setUploadTarget}
+                uploading={uploading}
+                dragOver={dragOver}
                 onDragOver={(e) => {
                   e.preventDefault();
                   setDragOver(true);
@@ -430,31 +442,20 @@ export default function OmnichannelKnowledgeBasePage() {
                   setDragOver(false);
                   void handleFiles(e.dataTransfer.files);
                 }}
-                className={`rounded-lg border-2 border-dashed p-5 transition-colors ${dragOver ? "border-primary bg-primary/5" : "border-border"}`}
-              >
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">Carica file</p>
-                    <p className="text-xs text-muted-foreground">
-                      PDF, Word, Excel, CSV, TXT o Markdown, fino a 25 MB ciascuno. Puoi trascinarne più di uno insieme.
-                      Per i listini usa Excel o CSV con una riga per prodotto: il bot ritrova il prodotto giusto con il suo prezzo.
-                    </p>
-                  </div>
-                  <div className="space-y-1.5 lg:w-56">
-                    <Label className="text-xs">Carica in</Label>
-                    <CompanySelect companies={companies} value={uploadTarget} onChange={setUploadTarget} noneValue={NONE} />
-                  </div>
-                  <div className="flex gap-2">
-                    <input ref={fileInput} type="file" multiple accept={ACCEPTED_FILES} className="hidden" onChange={(e) => e.target.files && void handleFiles(e.target.files)} />
-                    <Button onClick={() => fileInput.current?.click()} disabled={!!uploading}>
-                      {uploading ? <Loader2Icon className="animate-spin" /> : <UploadIcon />}
-                      {uploading ? `Caricamento ${uploading.done}/${uploading.total}` : "Scegli file"}
-                    </Button>
-                    <Button variant="outline" onClick={() => setEditor(emptyEditor("document", toCompanyId(uploadTarget) ?? ""))}>
-                      <PlusIcon /> Testo
-                    </Button>
-                  </div>
+                onPick={() => fileInput.current?.click()}
+                onText={() => setEditor(emptyEditor("document", toCompanyId(uploadTarget) ?? ""))}
+              />
+              <input ref={fileInput} type="file" multiple accept={ACCEPTED_FILES} className="hidden" onChange={(e) => e.target.files && void handleFiles(e.target.files)} />
+
+              <div className="space-y-3 pt-2">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold">
+                    {deepActive ? "Risultati" : "File caricati"}
+                    {!deepActive && documents ? <span className="ml-1.5 font-normal text-muted-foreground">({docs.length})</span> : null}
+                  </h3>
+                  {!deepActive && docs.length > 0 && <span className="text-xs text-muted-foreground">dal più recente</span>}
                 </div>
+                {searchToolbar}
               </div>
 
               {selected.size > 0 && (
@@ -516,17 +517,29 @@ export default function OmnichannelKnowledgeBasePage() {
             </TabsContent>
 
             <TabsContent value="instructions" className="mt-4 space-y-4">
-              <div className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-sm">
-                  <p className="font-medium">Insegna al bot come comportarsi{currentCompany ? ` per ${currentCompany.name}` : ""}</p>
-                  <p className="text-muted-foreground">
-                    Una regola per istruzione: &quot;Se chiedono un preventivo, chiedi città e data&quot;, &quot;Non promettere mai tempi di consegna&quot;.
-                    Di norma il bot la usa solo quando il messaggio è pertinente; quelle <strong>sempre attive</strong> viaggiano in ogni risposta, quindi tienile brevi.
-                  </p>
+              <div className="flex flex-col gap-3 rounded-xl border bg-muted/30 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3 text-sm">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                    <WandSparklesIcon className="size-5" />
+                  </div>
+                  <div>
+                    <p className="font-medium">Insegna al bot come comportarsi{currentCompany ? ` per ${currentCompany.name}` : ""}</p>
+                    <p className="text-muted-foreground">
+                      Una regola per istruzione, es. &quot;Se chiedono un preventivo, chiedi città e data&quot;. Quelle <strong>sempre attive</strong> viaggiano in ogni risposta: tienile brevi.
+                    </p>
+                  </div>
                 </div>
                 <Button onClick={() => setEditor(emptyEditor("instruction", companyFolderId))} className="shrink-0">
                   <PlusIcon /> Nuova istruzione
                 </Button>
+              </div>
+
+              <div className="space-y-3 pt-2">
+                <h3 className="text-sm font-semibold">
+                  {deepActive ? "Risultati" : "Istruzioni"}
+                  {!deepActive && documents ? <span className="ml-1.5 font-normal text-muted-foreground">({instructions.length})</span> : null}
+                </h3>
+                {searchToolbar}
               </div>
 
               {selected.size > 0 && (
@@ -1158,6 +1171,83 @@ function DocumentRow({
       {!extra && doc.preview && <p className="mt-2 line-clamp-3 pl-7 text-sm whitespace-pre-line text-muted-foreground">{doc.preview}</p>}
       {extra}
       {doc.error_message && <p className="mt-2 pl-7 text-xs text-amber-700 dark:text-amber-400">{doc.error_message}</p>}
+    </div>
+  );
+}
+
+const FORMATS = ["PDF", "Word", "Excel", "CSV", "TXT", "Markdown"];
+
+function UploadCard({
+  companies,
+  target,
+  onTarget,
+  uploading,
+  dragOver,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+  onPick,
+  onText,
+}: {
+  companies: OmniKnowledgeCompanyResponse[] | undefined;
+  target: string;
+  onTarget: (value: string) => void;
+  uploading: { done: number; total: number } | null;
+  dragOver: boolean;
+  onDragOver: (e: DragEvent<HTMLDivElement>) => void;
+  onDragLeave: () => void;
+  onDrop: (e: DragEvent<HTMLDivElement>) => void;
+  onPick: () => void;
+  onText: () => void;
+}) {
+  const destination = companies?.find((c) => c.id === target)?.name;
+  return (
+    <div
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      className={`overflow-hidden rounded-xl border-2 border-dashed transition-all ${dragOver ? "border-primary bg-primary/5 ring-4 ring-primary/10" : "border-border bg-card"}`}
+    >
+      <div className="flex flex-col items-center gap-4 px-6 py-8 text-center">
+        <div className={`flex size-14 items-center justify-center rounded-2xl transition-colors ${dragOver ? "bg-primary text-primary-foreground" : "bg-primary/10 text-primary"}`}>
+          <CloudUploadIcon className="size-7" />
+        </div>
+        <div className="space-y-1">
+          <p className="text-base font-semibold">{dragOver ? "Lascia qui i file" : "Trascina qui i file da far leggere al bot"}</p>
+          <p className="text-sm text-muted-foreground">oppure</p>
+        </div>
+        <div className="flex flex-wrap justify-center gap-2">
+          <Button size="lg" onClick={onPick} disabled={!!uploading}>
+            {uploading ? <Loader2Icon className="animate-spin" /> : <UploadIcon />}
+            {uploading ? `Caricamento ${uploading.done}/${uploading.total}` : "Scegli i file"}
+          </Button>
+          <Button size="lg" variant="outline" onClick={onText} disabled={!!uploading}>
+            <PencilIcon /> Scrivi un testo
+          </Button>
+        </div>
+        {uploading ? (
+          <Progress value={Math.round((uploading.done / uploading.total) * 100)} className="w-full max-w-xs" aria-label="Avanzamento caricamento" />
+        ) : (
+          <div className="flex flex-wrap items-center justify-center gap-1.5">
+            {FORMATS.map((format) => (
+              <Badge key={format} variant="outline" className="font-normal">{format}</Badge>
+            ))}
+            <span className="ml-1 text-xs text-muted-foreground">fino a 25 MB per file, anche più file insieme</span>
+          </div>
+        )}
+      </div>
+      <div className="flex flex-col gap-2 border-t bg-muted/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <FolderInputIcon className="size-4 shrink-0 text-muted-foreground" />
+          <Label className="text-sm font-medium">Salva in</Label>
+          <div className="w-full sm:w-60">
+            <CompanySelect companies={companies} value={target} onChange={onTarget} noneValue={NONE} />
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {destination ? `I file andranno nella cartella di ${destination}.` : "Senza azienda: valgono per tutte."} Listini: meglio Excel o CSV, una riga per prodotto.
+        </p>
+      </div>
     </div>
   );
 }
