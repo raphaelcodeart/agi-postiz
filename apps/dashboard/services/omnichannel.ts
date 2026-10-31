@@ -22,6 +22,8 @@ import type {
   OmniKnowledgeCompanyResponse,
   OmniKnowledgeCompanyUpdate,
   OmniKnowledgeDocumentCreate,
+  OmniKnowledgeFindParams,
+  OmniKnowledgeFindResponse,
   OmniKnowledgeListParams,
   OmniKnowledgeDocumentResponse,
   OmniKnowledgeDocumentUpdate,
@@ -187,6 +189,14 @@ export function getCustomerCrmProfile(customerId: string, channel?: string): Pro
 // Knowledge base
 export function listKnowledgeDocuments(params: OmniKnowledgeListParams = {}): Promise<OmniKnowledgeDocumentResponse[]> {
   return apiClient.get<OmniKnowledgeDocumentResponse[]>(`${BASE}/knowledge-base${buildQueryString({ company: params.company, q: params.q?.trim() || undefined })}`);
+}
+
+// Ricerca avanzata (nome del file + contenuto, con il motore del bot): si
+// lancia a richiesta, non a ogni tasto, perche' costa un embedding.
+export function findKnowledgeDocuments(params: OmniKnowledgeFindParams): Promise<OmniKnowledgeFindResponse> {
+  return apiClient.get<OmniKnowledgeFindResponse>(
+    `${BASE}/knowledge-base/find${buildQueryString({ q: params.q?.trim(), company: params.company, kind: params.kind })}`
+  );
 }
 
 export function getKnowledgeDocument(id: string): Promise<OmniKnowledgeDocumentResponse> {

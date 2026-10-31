@@ -4,7 +4,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import * as omnichannelService from "@/services/omnichannel";
 import { queryKeys } from "@/lib/query/keys";
 import type { ListConversationsParams } from "@/services/omnichannel";
-import type { OmniAIAgentConfigUpdate, OmniBroadcastRequest, OmniChannelAccountCreate, OmniChannelAccountUpdate, OmniCustomerUpdate, OmniKnowledgeCompanyCreate, OmniKnowledgeCompanyUpdate, OmniKnowledgeDocumentCreate, OmniKnowledgeDocumentUpdate, OmniKnowledgeListParams, OmniTagCreate } from "@/types/api";
+import type { OmniAIAgentConfigUpdate, OmniBroadcastRequest, OmniChannelAccountCreate, OmniChannelAccountUpdate, OmniCustomerUpdate, OmniKnowledgeCompanyCreate, OmniKnowledgeCompanyUpdate, OmniKnowledgeDocumentCreate, OmniKnowledgeDocumentUpdate, OmniKnowledgeFindParams, OmniKnowledgeListParams, OmniTagCreate } from "@/types/api";
 
 // Channel accounts
 export function useChannelAccounts() {
@@ -290,6 +290,20 @@ export function useKnowledgeDocuments(params: OmniKnowledgeListParams = {}) {
     // finche' ne manca qualcuno si ricontrolla, poi si smette.
     refetchInterval: (query) =>
       query.state.data?.some((doc) => doc.embedded_chunks < doc.chunk_count && !doc.error_message) ? 4000 : false,
+  });
+}
+
+// Ricerca avanzata: parte solo con una ricerca confermata (Invio) di almeno
+// 2 caratteri. Sta sotto la chiave della Knowledge Base, quindi caricare,
+// spostare o eliminare un documento la aggiorna come l'elenco.
+export function useFindKnowledgeDocuments(params: OmniKnowledgeFindParams) {
+  const q = params.q?.trim() ?? "";
+  return useQuery({
+    queryKey: queryKeys.omnichannel.knowledgeFind({ ...params, q }),
+    queryFn: () => omnichannelService.findKnowledgeDocuments({ ...params, q }),
+    enabled: q.length >= 2,
+    placeholderData: keepPreviousData,
+    staleTime: 60_000,
   });
 }
 

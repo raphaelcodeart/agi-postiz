@@ -206,3 +206,104 @@ def test_non_si_usano_aziende_di_altri(client, admin, admin_token, db):
     response = client.post(BASE, headers=admin_token(admin), json={"title": "X", "content_text": "Y", "company_id": their["id"]})
 
     assert response.status_code == 404
+
+
+# --- Ricerca avanzata dall'elenco (GET /knowledge-base/find) --------------------
+def _add_document(client, admin, admin_token, title, content, company_id=None, **fields):
+    response = client.post(BASE, headers=admin_token(admin), json={"title": title, "content_text": content, "company_id": company_id, **fields})
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _find(client, admin, admin_token, q, **params):
+    response = client.get(f"{BASE}/find", headers=admin_token(admin), params={"q": q, **params})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_la_ricerca_avanzata_trova_il_file_per_nome_e_lo_mette_prima_di_tutto(client, admin, admin_token):
+    csv_data = "Prodotto;Prezzo\nCrema viso;19 euro\n".encode()
+    upload = client.post(
+        f"{BASE}/upload", headers=admin_token(admin),
+        files={"file": ("Listino_Primavera_2026.csv", io.BytesIO(csv_data), "text/csv")},
+    )
+    assert upload.status_code == 201, upload.text
+    # Un documento che PARLA di listini, ma non si chiama cosi'.
+    _add_document(client, admin, admin_token, "Condizioni di vendita", "I prezzi del listino primavera valgono fino a giugno. Spedizione gratuita sopra 50 euro.")
+
+    body = _find(client, admin, admin_token, "listino primavera")
+
+    assert body["query"] == "listino primavera"
+    titles = [hit["document"]["title"] for hit in body["hits"]]
+    assert titles[0] == "Listino Primavera 2026"
+    assert body["hits"][0]["matched_by"][0] == "nome"
+    assert body["hits"][0]["document"]["content_text"] is None, "come nell'elenco, niente testo intero"
+    # Il secondo e' uscito per contenuto, con il passaggio in cui se ne parla.
+    assert "Condizioni di vendita" in titles
+    by_content = next(hit for hit in body["hits"] if hit["document"]["title"] == "Condizioni di vendita")
+    assert "testo" in by_content["matched_by"] and "nome" not in by_content["matched_by"]
+    assert by_content["snippets"] and "listino primavera" in by_content["snippets"][0]["content"].lower()
+
+
+def test_la_ricerca_avanzata_trova_il_documento_che_parla_dell_argomento(client, admin, admin_token):
+    _add_document(client, admin, admin_token, "FAQ generali", "Le consegne in Sardegna richiedono 3 giorni lavorativi in piu' rispetto al continente.")
+    _add_document(client, admin, admin_token, "Orari", "Siamo aperti dal lunedi' al venerdi' dalle 9 alle 18.")
+
+    body = _find(client, admin, admin_token, "consegna sardegna")
+
+    assert [hit["document"]["title"] for hit in body["hits"]] == ["FAQ generali"]
+    assert body["hits"][0]["matched_by"] == ["testo"]
+    assert "Sardegna" in body["hits"][0]["snippets"][0]["content"]
+
+
+def test_la_ricerca_avanzata_rispetta_la_cartella_aperta(client, admin, admin_token):
+    rossi = _create_company(client, admin, admin_token, "Bottega Rossi")
+    _add_document(client, admin, admin_token, "Listino Rossi", "Vaso in ceramica 40 euro.", company_id=rossi["id"])
+    _add_document(client, admin, admin_token, "Listino generale", "Spedizione standard 7 euro.")
+
+    tutte = _find(client, admin, admin_token, "listino")
+    solo_rossi = _find(client, admin, admin_token, "listino", company=rossi["id"])
+    senza = _find(client, admin, admin_token, "listino", company="none")
+
+    assert sorted(hit["document"]["title"] for hit in tutte["hits"]) == ["Listino Rossi", "Listino generale"]
+    # Dentro una cartella si vede solo quella cartella: niente documenti generali, a differenza di "Prova il bot".
+    assert [hit["document"]["title"] for hit in solo_rossi["hits"]] == ["Listino Rossi"]
+    assert [hit["document"]["title"] for hit in senza["hits"]] == ["Listino generale"]
+    assert client.get(f"{BASE}/find", headers=admin_token(admin), params={"q": "listino", "company": "non-un-id"}).status_code == 422
+
+
+def test_la_ricerca_avanzata_filtra_per_tipo_e_trova_anche_le_istruzioni_sempre_attive(client, admin, admin_token):
+    _add_document(client, admin, admin_token, "Politica resi", "Il reso e' gratuito entro 14 giorni.")
+    _add_document(client, admin, admin_token, "Tono", "Parla sempre del reso con calma e senza promettere rimborsi.", kind="instruction", always_on=True)
+
+    docs = _find(client, admin, admin_token, "reso", kind="document")
+    instructions = _find(client, admin, admin_token, "reso", kind="instruction")
+    everything = _find(client, admin, admin_token, "reso")
+
+    assert [hit["document"]["title"] for hit in docs["hits"]] == ["Politica resi"]
+    assert [hit["document"]["title"] for hit in instructions["hits"]] == ["Tono"]
+    assert len(everything["hits"]) == 2
+    assert client.get(f"{BASE}/find", headers=admin_token(admin), params={"q": "x"}).status_code == 422, "almeno 2 caratteri"
+
+
+def test_la_ricerca_avanzata_non_mostra_le_schede_azienda_ne_i_documenti_di_altri(client, admin, admin_token, db):
+    from app.models.administrator import Administrator
+    from app.models.omnichannel import OmniKnowledgeDocument
+
+    _create_company(client, admin, admin_token, "Ceramiche Blu", description="Bottega di ceramiche artigianali")
+    other = Administrator(email=f"other-{uuid.uuid4().hex[:6]}@test.local", password_hash="x", full_name="Other", is_active=True)
+    db.add(other)
+    db.flush()
+    db.add(OmniKnowledgeDocument(owner_id=other.id, title="Ceramiche segrete", content_text="Ceramiche di un altro account", status="ready"))
+    db.commit()
+
+    body = _find(client, admin, admin_token, "ceramiche")
+
+    assert body["hits"] == []
+
+
+def test_un_nome_di_file_con_caratteri_speciali_non_rompe_la_ricerca(client, admin, admin_token):
+    _add_document(client, admin, admin_token, "Listino 100% cotone_bio", "Magliette in cotone biologico.")
+
+    assert [hit["document"]["title"] for hit in _find(client, admin, admin_token, "100% cotone")["hits"]] == ["Listino 100% cotone_bio"]
+    assert _find(client, admin, admin_token, "%_")["hits"] == []

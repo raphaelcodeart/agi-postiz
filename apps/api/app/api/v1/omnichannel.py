@@ -75,6 +75,9 @@ from app.schemas.schemas import (
     OmniKnowledgeDocumentUpdate,
     OmniKnowledgeSearchRequest,
     OmniKnowledgeSearchResponse,
+    OmniKnowledgeFindHit,
+    OmniKnowledgeFindResponse,
+    OmniKnowledgeFindSnippet,
     OmniKnowledgeSearchHit,
     OmniKnowledgeStatsResponse,
     OmniTagCreate,
@@ -947,6 +950,27 @@ def _rechunk_documents(db: Session, documents: List[OmniKnowledgeDocument]) -> N
 PREVIEW_CHARS = 300
 
 
+def _list_item(doc: OmniKnowledgeDocument, preview: Optional[str], embedded: int) -> OmniKnowledgeDocumentResponse:
+    """Riga dell'elenco: senza content_text, con l'inizio del testo."""
+    return OmniKnowledgeDocumentResponse(
+        id=doc.id, title=doc.title, source_type=doc.source_type, content_text=None, preview=preview,
+        source_url=doc.source_url, status=doc.status, kind=doc.kind, always_on=doc.always_on,
+        company_id=doc.company_id, company=doc.company, file_name=doc.file_name, chunk_count=doc.chunk_count,
+        embedded_chunks=embedded, error_message=doc.error_message,
+        created_at=doc.created_at, updated_at=doc.updated_at,
+    )
+
+
+def _company_scope(company: Optional[str]) -> knowledge.CompanyScope:
+    """Parametro ?company= degli elenchi: assente = tutte, 'none' = senza azienda, altrimenti l'id."""
+    if not company or company == "none":
+        return company or None
+    try:
+        return uuid.UUID(company)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Azienda non valida")
+
+
 @router.get("/knowledge-base", response_model=List[OmniKnowledgeDocumentResponse])
 def list_knowledge_documents(
     company: Optional[str] = Query(None, description="id dell'azienda, oppure 'none' per i documenti senza azienda"),
@@ -961,13 +985,7 @@ def list_knowledge_documents(
         .options(defer(OmniKnowledgeDocument.content_text))
         .filter(OmniKnowledgeDocument.owner_id == admin.id, OmniKnowledgeDocument.kind != "profile")
     )
-    if company == "none":
-        query = query.filter(OmniKnowledgeDocument.company_id.is_(None))
-    elif company:
-        try:
-            query = query.filter(OmniKnowledgeDocument.company_id == uuid.UUID(company))
-        except ValueError:
-            raise HTTPException(status_code=422, detail="Azienda non valida")
+    query = knowledge._scope_documents(query, _company_scope(company))
     if kind:
         query = query.filter(OmniKnowledgeDocument.kind == kind)
     if q and q.strip():
@@ -979,16 +997,53 @@ def list_knowledge_documents(
         ))
     rows = query.order_by(OmniKnowledgeDocument.created_at.desc()).all()
     embedded = _embedded_counts(db, admin.id, [doc.id for doc, _ in rows])
-    return [
-        OmniKnowledgeDocumentResponse(
-            id=doc.id, title=doc.title, source_type=doc.source_type, content_text=None, preview=preview,
-            source_url=doc.source_url, status=doc.status, kind=doc.kind, always_on=doc.always_on,
-            company_id=doc.company_id, company=doc.company, file_name=doc.file_name, chunk_count=doc.chunk_count,
-            embedded_chunks=embedded.get(doc.id, 0), error_message=doc.error_message,
-            created_at=doc.created_at, updated_at=doc.updated_at,
+    return [_list_item(doc, preview, embedded.get(doc.id, 0)) for doc, preview in rows]
+
+
+@router.get("/knowledge-base/find", response_model=OmniKnowledgeFindResponse)
+def find_knowledge_documents(
+    q: str = Query(..., min_length=2, max_length=500),
+    company: Optional[str] = Query(None, description="id dell'azienda, oppure 'none' per i documenti senza azienda"),
+    kind: Optional[str] = Query(None, pattern="^(document|instruction)$"),
+    db: Session = Depends(get_db),
+    admin: Administrator = Depends(get_current_admin),
+):
+    """
+    Ricerca avanzata dall'elenco: trova i documenti per nome del file o titolo
+    e per contenuto, con lo stesso motore ibrido del bot ma raggruppato per
+    documento e con i passaggi trovati. Si lancia a richiesta (Invio), non a
+    ogni tasto: costa al massimo un embedding per ricerca.
+    """
+    api_key, _ = get_openai_credentials(db)
+    found, warning = knowledge.find_documents(db, admin.id, q, api_key, company_scope=_company_scope(company), kind=kind)
+    if not found:
+        return OmniKnowledgeFindResponse(query=q, hits=[], warning=warning)
+
+    ids = [entry.document_id for entry in found]
+    rows = (
+        db.query(OmniKnowledgeDocument, func.left(OmniKnowledgeDocument.content_text, PREVIEW_CHARS))
+        .options(defer(OmniKnowledgeDocument.content_text))
+        .filter(OmniKnowledgeDocument.owner_id == admin.id, OmniKnowledgeDocument.id.in_(ids))
+        .all()
+    )
+    documents = {doc.id: (doc, preview) for doc, preview in rows}
+    embedded = _embedded_counts(db, admin.id, ids)
+    hits = [
+        OmniKnowledgeFindHit(
+            document=_list_item(doc, preview, embedded.get(doc.id, 0)),
+            score=entry.score, matched_by=entry.matched_by,
+            snippets=[
+                OmniKnowledgeFindSnippet(heading=s.heading, content=s.content, matched_by=s.matched_by, similarity=s.similarity)
+                for s in entry.snippets
+            ],
         )
-        for doc, preview in rows
+        for entry in found
+        for doc, preview in [documents[entry.document_id]]
+        if entry.document_id in documents
     ]
+    # A pari punteggio (tipico dei file trovati solo per nome) prima i piu' recenti.
+    hits.sort(key=lambda hit: (-hit.score, -hit.document.updated_at.timestamp()))
+    return OmniKnowledgeFindResponse(query=q, hits=hits, warning=warning)
 
 
 @router.get("/knowledge-base/stats", response_model=OmniKnowledgeStatsResponse)

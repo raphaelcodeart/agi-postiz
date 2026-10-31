@@ -38,11 +38,11 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import httpx
 import numpy as np
-from sqlalchemy import func, text
+from sqlalchemy import and_, func, or_, text
 from sqlalchemy.orm import Session
 
 from app.integrations.omnichannel.exceptions import ConnectorError
@@ -496,12 +496,16 @@ _FTS_DOCUMENT = "coalesce(c.heading, '') || ' ' || c.content"
 
 def _fts_search(
     db: Session, owner_id: uuid.UUID, query_text: str, limit: int, company_id: Optional[uuid.UUID] = None,
+    include_always_on: bool = False,
 ) -> List[Tuple[uuid.UUID, float]]:
     terms = _fts_terms(query_text)
     codes = _code_terms(query_text)
     if not terms and not codes:
         return []
     params: Dict[str, object] = {"owner_id": owner_id, "limit": limit}
+    # Le istruzioni sempre attive stanno gia' nel prompt: il bot non le cerca.
+    # L'operatore che cerca un file invece le vuole trovare come tutto il resto.
+    always_on_filter = "" if include_always_on else "AND NOT d.always_on"
     company_filter = ""
     if company_id:
         params["company_id"] = company_id
@@ -528,7 +532,7 @@ def _fts_search(
         JOIN omni_knowledge_documents d ON d.id = c.document_id
         CROSS JOIN q
         WHERE c.owner_id = :owner_id
-          AND d.status = 'ready' AND NOT d.always_on
+          AND d.status = 'ready' {always_on_filter}
           {company_filter}
           AND (to_tsvector('italian', {_FTS_DOCUMENT}) @@ q.it
                OR to_tsvector('simple', {_FTS_DOCUMENT}) @@ q.si
@@ -619,6 +623,47 @@ def _vector_search(
     return [(ids[i], float(similarities[i])) for i in top]
 
 
+def _hybrid_rank(
+    db: Session,
+    owner_id: uuid.UUID,
+    query_text: str,
+    api_key: Optional[str],
+    pool: int,
+    company_id: Optional[uuid.UUID] = None,
+    include_always_on: bool = False,
+) -> Tuple[Dict[uuid.UUID, float], Dict[uuid.UUID, List[str]], Dict[uuid.UUID, float], Optional[str]]:
+    """
+    Il motore ibrido, senza presentazione: full-text + vettori fusi con RRF.
+    Ritorna (punteggio per blocco, come e' stato trovato ciascuno, somiglianza
+    coseno dove c'e', avviso). Lo usano search() per il bot e find_documents()
+    per la ricerca avanzata dall'elenco: stessa classifica, letture diverse.
+    """
+    fts_hits = _fts_search(db, owner_id, query_text, pool, company_id, include_always_on)
+
+    vector_hits: List[Tuple[uuid.UUID, float]] = []
+    warning: Optional[str] = None
+    if api_key and has_embeddings(db, owner_id):
+        try:
+            query_vector = embed_texts(api_key, [query_text])[0]
+            vector_hits = _vector_search(db, owner_id, query_vector, pool, company_id)
+        except ConnectorError as e:
+            warning = f"Ricerca semantica non disponibile, uso solo quella testuale: {e.message}"
+            logger.warning("Knowledge base vector search skipped for owner %s: %s", owner_id, e.message)
+
+    similarity = {chunk_id: sim for chunk_id, sim in vector_hits}
+    fused: Dict[uuid.UUID, float] = {}
+    matched: Dict[uuid.UUID, List[str]] = {}
+    for rank, (chunk_id, _) in enumerate(fts_hits):
+        fused[chunk_id] = fused.get(chunk_id, 0.0) + 1.0 / (_RRF_K + rank + 1)
+        matched.setdefault(chunk_id, []).append("testo")
+    for rank, (chunk_id, sim) in enumerate(vector_hits):
+        if sim < MIN_VECTOR_SIMILARITY and chunk_id not in fused:
+            continue
+        fused[chunk_id] = fused.get(chunk_id, 0.0) + 1.0 / (_RRF_K + rank + 1)
+        matched.setdefault(chunk_id, []).append("significato")
+    return fused, matched, similarity, warning
+
+
 def has_embeddings(db: Session, owner_id: uuid.UUID) -> bool:
     return db.query(OmniKnowledgeChunk.id).filter(
         OmniKnowledgeChunk.owner_id == owner_id, OmniKnowledgeChunk.embedding.isnot(None)
@@ -646,30 +691,7 @@ def search(
         return [], None
 
     pool = max(limit * 4, 20)
-    fts_hits = _fts_search(db, owner_id, query_text, pool, company_id)
-
-    vector_hits: List[Tuple[uuid.UUID, float]] = []
-    warning: Optional[str] = None
-    if api_key and has_embeddings(db, owner_id):
-        try:
-            query_vector = embed_texts(api_key, [query_text])[0]
-            vector_hits = _vector_search(db, owner_id, query_vector, pool, company_id)
-        except ConnectorError as e:
-            warning = f"Ricerca semantica non disponibile, uso solo quella testuale: {e.message}"
-            logger.warning("Knowledge base vector search skipped for owner %s: %s", owner_id, e.message)
-
-    similarity = {chunk_id: sim for chunk_id, sim in vector_hits}
-    fused: Dict[uuid.UUID, float] = {}
-    matched: Dict[uuid.UUID, List[str]] = {}
-    for rank, (chunk_id, _) in enumerate(fts_hits):
-        fused[chunk_id] = fused.get(chunk_id, 0.0) + 1.0 / (_RRF_K + rank + 1)
-        matched.setdefault(chunk_id, []).append("testo")
-    for rank, (chunk_id, sim) in enumerate(vector_hits):
-        if sim < MIN_VECTOR_SIMILARITY and chunk_id not in fused:
-            continue
-        fused[chunk_id] = fused.get(chunk_id, 0.0) + 1.0 / (_RRF_K + rank + 1)
-        matched.setdefault(chunk_id, []).append("significato")
-
+    fused, matched, similarity, warning = _hybrid_rank(db, owner_id, query_text, api_key, pool, company_id)
     if not fused:
         return [], warning
 
@@ -699,6 +721,186 @@ def search(
         used += len(chunk.content)
         if len(results) >= limit:
             break
+    return results, warning
+
+
+# ------------------------------------------------------------------------------
+# Ricerca avanzata dall'elenco: trova i documenti, per nome o per contenuto
+# ------------------------------------------------------------------------------
+# search() risponde "quali blocchi servono al bot per questa domanda"; questa
+# risponde all'operatore "in quali file se ne parla, e dove". Stesso motore
+# ibrido, ma pesca piu' blocchi, li raggruppa per documento con i passaggi
+# trovati, e mette davanti a tutto i file il cui nome o titolo somiglia alla
+# ricerca: chi scrive "listino 2026" vuole quel file, non i blocchi che
+# parlano di listini.
+FIND_POOL = 120
+FIND_MAX_DOCUMENTS = 30
+FIND_SNIPPETS_PER_DOCUMENT = 3
+FIND_SNIPPET_CHARS = 280
+# I punteggi RRF dei blocchi sono dell'ordine di 1/60: il nome vale piu' di
+# qualunque somma di blocchi, cosi' un file trovato per nome sta sempre in cima.
+_NAME_MATCH_SCORE = 1.0
+
+# None = tutte le aziende, "none" = solo i documenti senza azienda, un id = solo
+# quell'azienda (a differenza di search(), qui NON si aggiungono i documenti
+# generali: l'operatore sta guardando dentro una cartella precisa).
+CompanyScope = Union[None, str, uuid.UUID]
+
+
+@dataclass
+class FoundSnippet:
+    heading: Optional[str]
+    content: str
+    matched_by: List[str]
+    similarity: Optional[float]
+
+
+@dataclass
+class FoundDocument:
+    document_id: uuid.UUID
+    score: float
+    matched_by: List[str]  # "nome", "testo", "significato"
+    snippets: List[FoundSnippet] = field(default_factory=list)
+
+
+def _name_terms(query_text: str) -> List[str]:
+    return [term for term in re.findall(r"[^\W_]+", query_text.lower()) if len(term) >= 2][:10]
+
+
+def _like_pattern(value: str) -> str:
+    escaped = value.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _scope_documents(query, company_scope: CompanyScope):
+    if company_scope == "none":
+        return query.filter(OmniKnowledgeDocument.company_id.is_(None))
+    if company_scope:
+        return query.filter(OmniKnowledgeDocument.company_id == company_scope)
+    return query
+
+
+def _in_scope(company_id: Optional[uuid.UUID], company_scope: CompanyScope) -> bool:
+    if company_scope == "none":
+        return company_id is None
+    if company_scope:
+        return company_id == company_scope
+    return True
+
+
+def _excerpt(content: str, terms: Sequence[str], width: int = FIND_SNIPPET_CHARS) -> str:
+    """
+    Il pezzo del blocco attorno alla prima parola cercata, tagliato su parole
+    intere; l'inizio del blocco se nessuna parola compare (trovato per
+    significato). All'operatore serve capire a colpo d'occhio perche' il file
+    e' uscito, non rileggere tutto il blocco.
+    """
+    flat = re.sub(r"\s+", " ", content).strip()
+    if len(flat) <= width:
+        return flat
+    lowered = flat.lower()
+    positions = [pos for pos in (lowered.find(term) for term in terms) if pos >= 0]
+    if not positions:
+        cut = flat.rfind(" ", 0, width)
+        return flat[: cut if cut > width // 2 else width].rstrip() + "…"
+    start = max(min(positions) - width // 3, 0)
+    end = min(start + width, len(flat))
+    start = max(end - width, 0)
+    if start > 0:
+        space = flat.find(" ", start, start + 40)
+        if space > 0:
+            start = space + 1
+    if end < len(flat):
+        space = flat.rfind(" ", end - 40, end)
+        if space > start:
+            end = space
+    return ("…" if start > 0 else "") + flat[start:end].strip() + ("…" if end < len(flat) else "")
+
+
+def find_documents(
+    db: Session,
+    owner_id: uuid.UUID,
+    query_text: str,
+    api_key: Optional[str],
+    company_scope: CompanyScope = None,
+    kind: Optional[str] = None,
+) -> Tuple[List[FoundDocument], Optional[str]]:
+    """
+    Documenti pertinenti alla ricerca, dal piu' al meno: prima quelli con il
+    nome del file o il titolo che contiene la ricerca (tutta, o ogni sua
+    parola), poi quelli in cui se ne parla, con fino a FIND_SNIPPETS_PER_DOCUMENT
+    passaggi ciascuno. Le schede azienda restano fuori: non sono file
+    dell'operatore. L'avviso e' lo stesso di search() (semantica non riuscita).
+    Costa al massimo un embedding.
+    """
+    query_text = (query_text or "").strip()
+    if not query_text:
+        return [], None
+    terms = _name_terms(query_text)
+
+    # 1) Nome del file o titolo.
+    base = db.query(OmniKnowledgeDocument.id).filter(
+        OmniKnowledgeDocument.owner_id == owner_id, OmniKnowledgeDocument.kind != "profile",
+    )
+    base = _scope_documents(base, company_scope)
+    if kind:
+        base = base.filter(OmniKnowledgeDocument.kind == kind)
+    name_field = func.lower(func.concat_ws(" ", OmniKnowledgeDocument.title, OmniKnowledgeDocument.file_name))
+    conditions = [name_field.like(_like_pattern(query_text), escape="\\")]
+    if terms:
+        conditions.append(and_(*[name_field.like(_like_pattern(term), escape="\\") for term in terms]))
+    name_ids = {row[0] for row in base.filter(or_(*conditions)).all()}
+
+    # 2) Contenuto: il motore ibrido, con un bacino largo perche' i blocchi si
+    # raggruppano per documento. Il filtro azienda del motore tiene anche i
+    # documenti generali: si scartano dopo, in base alla cartella aperta.
+    engine_company = company_scope if isinstance(company_scope, uuid.UUID) else None
+    fused, matched, similarity, warning = _hybrid_rank(
+        db, owner_id, query_text, api_key, FIND_POOL, engine_company, include_always_on=True,
+    )
+
+    found: Dict[uuid.UUID, FoundDocument] = {}
+    if fused:
+        rows = (
+            db.query(OmniKnowledgeChunk, OmniKnowledgeDocument.kind, OmniKnowledgeDocument.company_id)
+            .join(OmniKnowledgeDocument, OmniKnowledgeDocument.id == OmniKnowledgeChunk.document_id)
+            .filter(OmniKnowledgeChunk.id.in_(list(fused)))
+            .all()
+        )
+        per_document: Dict[uuid.UUID, List[OmniKnowledgeChunk]] = {}
+        for chunk, document_kind, document_company in rows:
+            if document_kind == "profile" or (kind and document_kind != kind) or not _in_scope(document_company, company_scope):
+                continue
+            per_document.setdefault(chunk.document_id, []).append(chunk)
+        for document_id, chunks in per_document.items():
+            chunks.sort(key=lambda c: fused[c.id], reverse=True)
+            scores = [fused[c.id] for c in chunks]
+            # Il blocco migliore decide, gli altri aggiungono poco: un file con
+            # un passaggio centrato batte uno che sfiora l'argomento dieci volte.
+            score = scores[0] + 0.25 * sum(scores[1:])
+            matched_by: List[str] = []
+            for chunk in chunks:
+                for how in matched.get(chunk.id, []):
+                    if how not in matched_by:
+                        matched_by.append(how)
+            snippets = [
+                FoundSnippet(
+                    heading=chunk.heading, content=_excerpt(chunk.content, terms), matched_by=matched.get(chunk.id, []),
+                    similarity=round(similarity[chunk.id], 3) if chunk.id in similarity else None,
+                )
+                for chunk in chunks[:FIND_SNIPPETS_PER_DOCUMENT]
+            ]
+            found[document_id] = FoundDocument(document_id=document_id, score=round(score, 5), matched_by=matched_by, snippets=snippets)
+
+    for document_id in name_ids:
+        entry = found.get(document_id)
+        if entry:
+            entry.score = round(entry.score + _NAME_MATCH_SCORE, 5)
+            entry.matched_by.insert(0, "nome")
+        else:
+            found[document_id] = FoundDocument(document_id=document_id, score=_NAME_MATCH_SCORE, matched_by=["nome"])
+
+    results = sorted(found.values(), key=lambda f: f.score, reverse=True)[:FIND_MAX_DOCUMENTS]
     return results, warning
 
 

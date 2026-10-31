@@ -1301,6 +1301,32 @@ class OmniKnowledgeSearchResponse(BaseModel):
     output_tokens: Optional[int] = None
 
 
+class OmniKnowledgeFindSnippet(BaseModel):
+    """Un passaggio del documento in cui si parla di quanto cercato."""
+    heading: Optional[str]
+    content: str
+    matched_by: List[str]
+    similarity: Optional[float]
+
+
+class OmniKnowledgeFindHit(BaseModel):
+    """
+    Risultato della ricerca avanzata dall'elenco: il documento come nell'elenco
+    (senza testo intero), perche' e' stato trovato ("nome" = nome del file o
+    titolo, "testo", "significato") e i passaggi pertinenti.
+    """
+    document: OmniKnowledgeDocumentResponse
+    score: float
+    matched_by: List[str]
+    snippets: List[OmniKnowledgeFindSnippet]
+
+
+class OmniKnowledgeFindResponse(BaseModel):
+    query: str
+    hits: List[OmniKnowledgeFindHit]
+    warning: Optional[str] = None
+
+
 class OmniKnowledgeStatsResponse(BaseModel):
     documents: int
     instructions: int

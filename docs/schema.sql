@@ -3,14 +3,17 @@
 -- "agi_post" — generato con:
 --   pg_dump -U postgres -d agi_post --schema-only --no-owner --no-privileges
 --
--- Snapshot generato: 2026-08-26 21:45 UTC, dal server di produzione di questo
--- progetto, alla revisione Alembic "e5f6a7b8c9d0" (head) - `SELECT version_num
--- FROM alembic_version;`. Rigenerato per una migration reale dal precedente
--- snapshot (2026-08-26 21:01, revisione "d4e5f6a7b8c9"): "e5f6a7b8c9d0"
--- aggiunge a stat_metric_history le colonne likes/impressions/reach, mancanti
--- da quando la tabella e' stata creata - fix di un bug reale (vedi
--- STATISTICS.md §2 e §9). Include quindi sia le tabelle/colonne nuove sia
--- tutte quelle preesistenti.
+-- Snapshot generato: 2026-10-31 21:14 UTC, dal server di produzione di questo
+-- progetto, alla revisione Alembic "a7d3c9e1f5b2" (head) - `SELECT version_num
+-- FROM alembic_version;`. Rigenerato dal precedente snapshot (2026-08-26,
+-- revisione "e5f6a7b8c9d0") perche' nel frattempo sono arrivate le migration
+-- del modulo Omnichannel Responder: in particolare la Knowledge Base e' oggi
+-- un RAG ibrido (colonne embedding/embedding_model/embedded_at e indici GIN
+-- full-text su omni_knowledge_chunks, revisione "b7e2d91c4a18"), ha le
+-- aziende come cartelle (tabella omni_knowledge_companies e
+-- omni_knowledge_documents.company_id, revisione "c5a83f0e9d21") e il
+-- collegamento al CRM Mamify ("a7d3c9e1f5b2"). Vedi OMNICHANNEL_RESPONDER.md §3.
+-- Include quindi sia le tabelle/colonne nuove sia tutte quelle preesistenti.
 --
 -- QUESTO FILE NON È LA FONTE DI VERITÀ DELLO SCHEMA. Lo sono le migration in
 -- apps/api/alembic/versions/ (vedi docs/DEPLOYMENT.md §5): per creare il
@@ -36,8 +39,8 @@
 --
 
 
--- Dumped from database version 16.14
--- Dumped by pg_dump version 16.14
+-- Dumped from database version 16.15
+-- Dumped by pg_dump version 16.15
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -207,7 +210,9 @@ CREATE TABLE public.buffer_connections (
     last_sync_at timestamp with time zone,
     last_error character varying(1000),
     created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL
+    updated_at timestamp with time zone NOT NULL,
+    provider character varying(30) DEFAULT 'buffer'::character varying NOT NULL,
+    provider_account_ref character varying(255)
 );
 
 
@@ -224,6 +229,49 @@ CREATE TABLE public.buffer_organizations (
     raw_metadata jsonb,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: campaign_participants; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.campaign_participants (
+    id uuid NOT NULL,
+    campaign_id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    social_channel_id uuid NOT NULL,
+    status character varying(30) DEFAULT 'included'::character varying NOT NULL,
+    added_by character varying(20) DEFAULT 'admin'::character varying NOT NULL,
+    decided_at timestamp with time zone,
+    decided_reason character varying(500),
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: campaign_proposals; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.campaign_proposals (
+    id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    title character varying(255) NOT NULL,
+    default_text character varying(5000) NOT NULL,
+    notes character varying(2000),
+    media_file_id uuid,
+    suggested_scheduled_at timestamp with time zone,
+    status character varying(30) DEFAULT 'draft'::character varying NOT NULL,
+    review_notes character varying(2000),
+    reviewed_by uuid,
+    reviewed_at timestamp with time zone,
+    submitted_at timestamp with time zone,
+    campaign_id uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    video_request character varying(2000),
+    target_platforms character varying(30)[] DEFAULT '{}'::character varying[] NOT NULL
 );
 
 
@@ -272,7 +320,12 @@ CREATE TABLE public.campaigns (
     metadata jsonb,
     article_id uuid,
     include_referral_link boolean NOT NULL,
-    include_personal_contacts boolean NOT NULL
+    include_personal_contacts boolean NOT NULL,
+    include_affiliate_disclosure boolean DEFAULT false NOT NULL,
+    participation_mode character varying(30) DEFAULT 'automatic'::character varying NOT NULL,
+    announced_at timestamp with time zone,
+    opt_out_deadline_at timestamp with time zone,
+    auto_launch_at_deadline boolean DEFAULT false NOT NULL
 );
 
 
@@ -301,7 +354,8 @@ CREATE TABLE public.media_files (
     metadata jsonb,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    deleted_at timestamp with time zone
+    deleted_at timestamp with time zone,
+    uploaded_by_user_id uuid
 );
 
 
@@ -329,7 +383,10 @@ CREATE TABLE public.omni_ai_agent_configs (
     sensitive_categories jsonb,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    auto_generate_draft boolean NOT NULL
+    auto_generate_draft boolean NOT NULL,
+    crm_enabled boolean DEFAULT false NOT NULL,
+    crm_api_key_encrypted text,
+    crm_base_url character varying(255)
 );
 
 
@@ -499,7 +556,30 @@ CREATE TABLE public.omni_knowledge_chunks (
     document_id uuid NOT NULL,
     chunk_index integer NOT NULL,
     content text NOT NULL,
-    created_at timestamp with time zone NOT NULL
+    created_at timestamp with time zone NOT NULL,
+    heading character varying(600),
+    embedding bytea,
+    embedding_model character varying(100),
+    embedded_at timestamp with time zone
+);
+
+
+--
+-- Name: omni_knowledge_companies; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.omni_knowledge_companies (
+    id uuid NOT NULL,
+    owner_id uuid NOT NULL,
+    name character varying(255) NOT NULL,
+    description text,
+    website character varying(500),
+    email character varying(255),
+    phone character varying(100),
+    address character varying(500),
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 
@@ -516,7 +596,13 @@ CREATE TABLE public.omni_knowledge_documents (
     source_url character varying(1000),
     status character varying(20) NOT NULL,
     created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL
+    updated_at timestamp with time zone NOT NULL,
+    kind character varying(20) DEFAULT 'document'::character varying NOT NULL,
+    always_on boolean DEFAULT false NOT NULL,
+    file_name character varying(255),
+    chunk_count integer DEFAULT 0 NOT NULL,
+    error_message text,
+    company_id uuid
 );
 
 
@@ -569,6 +655,19 @@ CREATE TABLE public.omni_tags (
     name character varying(100) NOT NULL,
     color character varying(20),
     created_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: platform_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.platform_settings (
+    id uuid NOT NULL,
+    affiliate_disclosure_text character varying(500),
+    affiliate_disclosure_text_short character varying(120),
+    updated_at timestamp with time zone NOT NULL,
+    auto_activate_new_users boolean DEFAULT true NOT NULL
 );
 
 
@@ -648,7 +747,10 @@ CREATE TABLE public.social_channels (
     raw_metadata jsonb,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    external_link character varying(1000)
+    external_link character varying(1000),
+    provider character varying(30) DEFAULT 'buffer'::character varying NOT NULL,
+    duplicate_of_channel_id uuid,
+    deleted_at timestamp with time zone
 );
 
 
@@ -728,6 +830,22 @@ CREATE TABLE public.stat_sync_runs (
     error_message character varying(1000),
     started_at timestamp with time zone NOT NULL,
     finished_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    triggered_by_user_id uuid
+);
+
+
+--
+-- Name: user_auth_tokens; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_auth_tokens (
+    id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    purpose character varying(32) NOT NULL,
+    token_hash character varying(64) NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    used_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL
 );
 
@@ -756,6 +874,21 @@ CREATE TABLE public.user_groups (
 
 
 --
+-- Name: user_notifications; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_notifications (
+    id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    kind character varying(50) NOT NULL,
+    sent_by_administrator_id uuid,
+    email character varying(255) NOT NULL,
+    metadata jsonb,
+    sent_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: users; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -770,7 +903,16 @@ CREATE TABLE public.users (
     updated_at timestamp with time zone NOT NULL,
     deleted_at timestamp with time zone,
     referral_link character varying(1000),
-    personal_contacts character varying(1000)
+    personal_contacts character varying(1000),
+    password_hash character varying(255),
+    last_login_at timestamp with time zone,
+    self_registered_at timestamp with time zone,
+    email_verified_at timestamp with time zone,
+    privacy_accepted_at timestamp with time zone,
+    verification_retroactive boolean DEFAULT false NOT NULL,
+    city character varying(120),
+    postal_code character varying(20),
+    profile_completed_at timestamp with time zone
 );
 
 
@@ -844,6 +986,22 @@ ALTER TABLE ONLY public.buffer_connections
 
 ALTER TABLE ONLY public.buffer_organizations
     ADD CONSTRAINT buffer_organizations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: campaign_participants campaign_participants_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.campaign_participants
+    ADD CONSTRAINT campaign_participants_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: campaign_proposals campaign_proposals_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.campaign_proposals
+    ADD CONSTRAINT campaign_proposals_pkey PRIMARY KEY (id);
 
 
 --
@@ -959,6 +1117,14 @@ ALTER TABLE ONLY public.omni_knowledge_chunks
 
 
 --
+-- Name: omni_knowledge_companies omni_knowledge_companies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.omni_knowledge_companies
+    ADD CONSTRAINT omni_knowledge_companies_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: omni_knowledge_documents omni_knowledge_documents_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -988,6 +1154,14 @@ ALTER TABLE ONLY public.omni_notifications
 
 ALTER TABLE ONLY public.omni_tags
     ADD CONSTRAINT omni_tags_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: platform_settings platform_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.platform_settings
+    ADD CONSTRAINT platform_settings_pkey PRIMARY KEY (id);
 
 
 --
@@ -1047,6 +1221,22 @@ ALTER TABLE ONLY public.blog_writer_publications
 
 
 --
+-- Name: buffer_connections uq_buffer_connection_user_provider; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.buffer_connections
+    ADD CONSTRAINT uq_buffer_connection_user_provider UNIQUE (user_id, provider);
+
+
+--
+-- Name: campaign_participants uq_campaign_participant_campaign_channel; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.campaign_participants
+    ADD CONSTRAINT uq_campaign_participant_campaign_channel UNIQUE (campaign_id, social_channel_id);
+
+
+--
 -- Name: campaign_targets uq_campaign_target_campaign_channel; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1060,6 +1250,14 @@ ALTER TABLE ONLY public.campaign_targets
 
 ALTER TABLE ONLY public.omni_customer_identities
     ADD CONSTRAINT uq_omni_identity_owner_channel_external UNIQUE (owner_id, channel, external_user_id);
+
+
+--
+-- Name: omni_knowledge_companies uq_omni_knowledge_company_owner_name; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.omni_knowledge_companies
+    ADD CONSTRAINT uq_omni_knowledge_company_owner_name UNIQUE (owner_id, name);
 
 
 --
@@ -1103,6 +1301,22 @@ ALTER TABLE ONLY public.stat_post_metrics
 
 
 --
+-- Name: user_auth_tokens uq_user_auth_tokens_token_hash; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_auth_tokens
+    ADD CONSTRAINT uq_user_auth_tokens_token_hash UNIQUE (token_hash);
+
+
+--
+-- Name: user_auth_tokens user_auth_tokens_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_auth_tokens
+    ADD CONSTRAINT user_auth_tokens_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: user_group_association user_group_association_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1119,11 +1333,47 @@ ALTER TABLE ONLY public.user_groups
 
 
 --
+-- Name: user_notifications user_notifications_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_notifications
+    ADD CONSTRAINT user_notifications_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: users users_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.users
     ADD CONSTRAINT users_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: idx_campaign_participants_campaign_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_campaign_participants_campaign_status ON public.campaign_participants USING btree (campaign_id, status);
+
+
+--
+-- Name: idx_campaign_participants_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_campaign_participants_user ON public.campaign_participants USING btree (user_id);
+
+
+--
+-- Name: idx_campaign_proposals_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_campaign_proposals_status ON public.campaign_proposals USING btree (status);
+
+
+--
+-- Name: idx_campaign_proposals_user_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_campaign_proposals_user_status ON public.campaign_proposals USING btree (user_id, status);
 
 
 --
@@ -1152,6 +1402,27 @@ CREATE INDEX idx_publication_scheduled_at ON public.publications USING btree (sc
 --
 
 CREATE INDEX idx_publication_status ON public.publications USING btree (status);
+
+
+--
+-- Name: idx_social_channels_deleted_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_social_channels_deleted_at ON public.social_channels USING btree (deleted_at);
+
+
+--
+-- Name: idx_social_channels_duplicate_of; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_social_channels_duplicate_of ON public.social_channels USING btree (duplicate_of_channel_id);
+
+
+--
+-- Name: idx_social_channels_provider; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_social_channels_provider ON public.social_channels USING btree (provider);
 
 
 --
@@ -1211,10 +1482,24 @@ CREATE INDEX idx_stat_sync_runs_started_at ON public.stat_sync_runs USING btree 
 
 
 --
+-- Name: idx_user_notifications_user_kind_sent; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_notifications_user_kind_sent ON public.user_notifications USING btree (user_id, kind, sent_at);
+
+
+--
 -- Name: ix_administrators_email; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE UNIQUE INDEX ix_administrators_email ON public.administrators USING btree (email);
+
+
+--
+-- Name: ix_campaign_proposals_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_campaign_proposals_user_id ON public.campaign_proposals USING btree (user_id);
 
 
 --
@@ -1281,10 +1566,45 @@ CREATE INDEX ix_omni_internal_notes_owner_id ON public.omni_internal_notes USING
 
 
 --
+-- Name: ix_omni_knowledge_chunks_document_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_omni_knowledge_chunks_document_id ON public.omni_knowledge_chunks USING btree (document_id);
+
+
+--
+-- Name: ix_omni_knowledge_chunks_fts_it; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_omni_knowledge_chunks_fts_it ON public.omni_knowledge_chunks USING gin (to_tsvector('italian'::regconfig, (((COALESCE(heading, ''::character varying))::text || ' '::text) || content)));
+
+
+--
+-- Name: ix_omni_knowledge_chunks_fts_simple; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_omni_knowledge_chunks_fts_simple ON public.omni_knowledge_chunks USING gin (to_tsvector('simple'::regconfig, (((COALESCE(heading, ''::character varying))::text || ' '::text) || content)));
+
+
+--
 -- Name: ix_omni_knowledge_chunks_owner_id; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX ix_omni_knowledge_chunks_owner_id ON public.omni_knowledge_chunks USING btree (owner_id);
+
+
+--
+-- Name: ix_omni_knowledge_companies_owner_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_omni_knowledge_companies_owner_id ON public.omni_knowledge_companies USING btree (owner_id);
+
+
+--
+-- Name: ix_omni_knowledge_documents_company_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_omni_knowledge_documents_company_id ON public.omni_knowledge_documents USING btree (company_id);
 
 
 --
@@ -1313,6 +1633,34 @@ CREATE INDEX ix_omni_notifications_owner_id ON public.omni_notifications USING b
 --
 
 CREATE INDEX ix_omni_tags_owner_id ON public.omni_tags USING btree (owner_id);
+
+
+--
+-- Name: ix_user_auth_tokens_purpose_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_user_auth_tokens_purpose_created ON public.user_auth_tokens USING btree (purpose, created_at);
+
+
+--
+-- Name: ix_user_auth_tokens_token_hash; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_user_auth_tokens_token_hash ON public.user_auth_tokens USING btree (token_hash);
+
+
+--
+-- Name: ix_user_auth_tokens_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_user_auth_tokens_user_id ON public.user_auth_tokens USING btree (user_id);
+
+
+--
+-- Name: ix_user_auth_tokens_user_purpose; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_user_auth_tokens_user_purpose ON public.user_auth_tokens USING btree (user_id, purpose);
 
 
 --
@@ -1402,6 +1750,62 @@ ALTER TABLE ONLY public.buffer_organizations
 
 
 --
+-- Name: campaign_participants campaign_participants_campaign_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.campaign_participants
+    ADD CONSTRAINT campaign_participants_campaign_id_fkey FOREIGN KEY (campaign_id) REFERENCES public.campaigns(id) ON DELETE CASCADE;
+
+
+--
+-- Name: campaign_participants campaign_participants_social_channel_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.campaign_participants
+    ADD CONSTRAINT campaign_participants_social_channel_id_fkey FOREIGN KEY (social_channel_id) REFERENCES public.social_channels(id) ON DELETE CASCADE;
+
+
+--
+-- Name: campaign_participants campaign_participants_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.campaign_participants
+    ADD CONSTRAINT campaign_participants_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: campaign_proposals campaign_proposals_campaign_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.campaign_proposals
+    ADD CONSTRAINT campaign_proposals_campaign_id_fkey FOREIGN KEY (campaign_id) REFERENCES public.campaigns(id) ON DELETE SET NULL;
+
+
+--
+-- Name: campaign_proposals campaign_proposals_media_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.campaign_proposals
+    ADD CONSTRAINT campaign_proposals_media_file_id_fkey FOREIGN KEY (media_file_id) REFERENCES public.media_files(id) ON DELETE SET NULL;
+
+
+--
+-- Name: campaign_proposals campaign_proposals_reviewed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.campaign_proposals
+    ADD CONSTRAINT campaign_proposals_reviewed_by_fkey FOREIGN KEY (reviewed_by) REFERENCES public.administrators(id) ON DELETE SET NULL;
+
+
+--
+-- Name: campaign_proposals campaign_proposals_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.campaign_proposals
+    ADD CONSTRAINT campaign_proposals_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
 -- Name: campaign_targets campaign_targets_campaign_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1447,6 +1851,30 @@ ALTER TABLE ONLY public.campaigns
 
 ALTER TABLE ONLY public.campaigns
     ADD CONSTRAINT campaigns_media_file_id_fkey FOREIGN KEY (media_file_id) REFERENCES public.media_files(id) ON DELETE SET NULL;
+
+
+--
+-- Name: media_files fk_media_files_uploaded_by_user; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.media_files
+    ADD CONSTRAINT fk_media_files_uploaded_by_user FOREIGN KEY (uploaded_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: social_channels fk_social_channels_duplicate_of; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.social_channels
+    ADD CONSTRAINT fk_social_channels_duplicate_of FOREIGN KEY (duplicate_of_channel_id) REFERENCES public.social_channels(id) ON DELETE SET NULL;
+
+
+--
+-- Name: stat_sync_runs fk_stat_sync_runs_triggered_by_user; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stat_sync_runs
+    ADD CONSTRAINT fk_stat_sync_runs_triggered_by_user FOREIGN KEY (triggered_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
 
 
 --
@@ -1650,6 +2078,22 @@ ALTER TABLE ONLY public.omni_knowledge_chunks
 
 
 --
+-- Name: omni_knowledge_companies omni_knowledge_companies_owner_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.omni_knowledge_companies
+    ADD CONSTRAINT omni_knowledge_companies_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES public.administrators(id) ON DELETE CASCADE;
+
+
+--
+-- Name: omni_knowledge_documents omni_knowledge_documents_company_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.omni_knowledge_documents
+    ADD CONSTRAINT omni_knowledge_documents_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.omni_knowledge_companies(id) ON DELETE SET NULL;
+
+
+--
 -- Name: omni_knowledge_documents omni_knowledge_documents_owner_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1842,6 +2286,14 @@ ALTER TABLE ONLY public.stat_sync_runs
 
 
 --
+-- Name: user_auth_tokens user_auth_tokens_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_auth_tokens
+    ADD CONSTRAINT user_auth_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
 -- Name: user_group_association user_group_association_group_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1855,6 +2307,22 @@ ALTER TABLE ONLY public.user_group_association
 
 ALTER TABLE ONLY public.user_group_association
     ADD CONSTRAINT user_group_association_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: user_notifications user_notifications_sent_by_administrator_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_notifications
+    ADD CONSTRAINT user_notifications_sent_by_administrator_id_fkey FOREIGN KEY (sent_by_administrator_id) REFERENCES public.administrators(id) ON DELETE SET NULL;
+
+
+--
+-- Name: user_notifications user_notifications_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_notifications
+    ADD CONSTRAINT user_notifications_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 
 --

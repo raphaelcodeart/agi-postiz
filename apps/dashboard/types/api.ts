@@ -1050,6 +1050,33 @@ export interface OmniKnowledgeListParams {
   q?: string;
 }
 
+export interface OmniKnowledgeFindParams extends OmniKnowledgeListParams {
+  kind?: OmniKnowledgeKind;
+}
+
+export interface OmniKnowledgeFindSnippet {
+  heading: string | null;
+  content: string;
+  matched_by: string[];
+  similarity: number | null;
+}
+
+// Risultato della ricerca avanzata: il documento come nell'elenco, perche' e'
+// stato trovato ("nome" = nome del file o titolo, "testo", "significato") e i
+// passaggi in cui se ne parla.
+export interface OmniKnowledgeFindHit {
+  document: OmniKnowledgeDocumentResponse;
+  score: number;
+  matched_by: string[];
+  snippets: OmniKnowledgeFindSnippet[];
+}
+
+export interface OmniKnowledgeFindResponse {
+  query: string;
+  hits: OmniKnowledgeFindHit[];
+  warning: string | null;
+}
+
 export interface OmniKnowledgeStats {
   documents: number;
   instructions: number;

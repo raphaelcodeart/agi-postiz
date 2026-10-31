@@ -8,7 +8,7 @@ Per un dump SQL di sola struttura (nessun dato), pronto da leggere in un unico f
 
 Le tabelle del modulo Blog Writer AI (`blog_writer_*`) sono documentate separatamente in [BLOG_WRITER.md](./BLOG_WRITER.md#2-schema-database), essendo un modulo isolato con proprio schema.
 
-Le tabelle del modulo Omnichannel Responder (`omni_*`, 15 tabelle) sono documentate separatamente in [OMNICHANNEL_RESPONDER.md](./OMNICHANNEL_RESPONDER.md#3-schema-database) — anch'esso un modulo isolato con proprio schema, collegato al resto della piattaforma solo tramite `owner_id` (FK verso `administrators.id`).
+Le tabelle del modulo Omnichannel Responder (`omni_*`, 16 tabelle: le 15 della migration iniziale più `omni_knowledge_companies`, le aziende-cartelle della Knowledge Base) sono documentate separatamente in [OMNICHANNEL_RESPONDER.md](./OMNICHANNEL_RESPONDER.md#3-schema-database) — anch'esso un modulo isolato con proprio schema, collegato al resto della piattaforma solo tramite `owner_id` (FK verso `administrators.id`).
 
 Le tabelle del modulo Statistiche (`stat_*`, 3 tabelle) sono documentate separatamente in [STATISTICS.md](./STATISTICS.md#2-schema-database) — anch'esso isolato, collegato al resto della piattaforma solo tramite foreign key in sola lettura verso `publications`/`campaigns`/`users`/`social_channels`/`buffer_connections`/`administrators`.
 

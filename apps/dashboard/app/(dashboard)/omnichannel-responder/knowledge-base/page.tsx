@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   BookOpenIcon,
@@ -23,6 +23,7 @@ import {
   Trash2Icon,
   UploadIcon,
   WandSparklesIcon,
+  XIcon,
 } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -42,6 +43,7 @@ import {
   useCreateKnowledgeDocument,
   useDeleteKnowledgeCompany,
   useDeleteKnowledgeDocument,
+  useFindKnowledgeDocuments,
   useKnowledgeCompanies,
   useKnowledgeDocuments,
   useKnowledgeStats,
@@ -56,7 +58,7 @@ import { useDebounce } from "@/hooks/use-debounce";
 import { ApiError } from "@/lib/api/client";
 import { formatDateTime } from "@/lib/format";
 import * as omnichannelService from "@/services/omnichannel";
-import type { OmniKnowledgeCompanyResponse, OmniKnowledgeDocumentResponse, OmniKnowledgeKind } from "@/types/api";
+import type { OmniKnowledgeCompanyResponse, OmniKnowledgeDocumentResponse, OmniKnowledgeFindHit, OmniKnowledgeKind } from "@/types/api";
 
 const ACCEPTED_FILES = ".pdf,.docx,.txt,.md,.csv,.xlsx";
 // Cartelle speciali accanto agli id delle aziende.
@@ -75,6 +77,25 @@ function errorMessage(err: unknown, fallback: string): string {
 
 // "" nei <select> = nessuna azienda (vale per tutte).
 const toCompanyId = (value: string): string | null => (value && value !== NONE && value !== ALL ? value : null);
+
+// Due modi di cercare nell'elenco: "rapida" filtra mentre si scrive (titolo,
+// nome del file, parole esatte nel testo); "avanzata" parte con Invio e usa il
+// motore del bot, cosi' trova anche i file che parlano dell'argomento con altre
+// parole. La seconda costa un embedding a ricerca: per questo non e' a ogni tasto.
+type SearchMode = "quick" | "deep";
+const MIN_DEEP_QUERY = 2;
+
+// Le stesse parole che il server usa per il nome del file: servono a
+// evidenziare nei risultati perche' un file e' uscito.
+function searchTerms(query: string): string[] {
+  return (query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((t) => t.length >= 2).slice(0, 10);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const MATCH_LABELS: Record<string, string> = { nome: "nome del file", testo: "parole nel testo", significato: "significato (AI)" };
 
 type EditorState = {
   id: string | null;
@@ -96,10 +117,16 @@ function editorTitle(editor: EditorState | null): string {
 export default function OmnichannelKnowledgeBasePage() {
   const [folder, setFolder] = useState<string>(ALL);
   const [textFilter, setTextFilter] = useState("");
+  const [searchMode, setSearchMode] = useState<SearchMode>("quick");
+  // La ricerca avanzata confermata con Invio (puo' differire da cio' che c'e' nella casella).
+  const [deepQuery, setDeepQuery] = useState("");
   const debouncedText = useDebounce(textFilter, 300);
+  const deepActive = searchMode === "deep" && deepQuery.trim().length >= MIN_DEEP_QUERY;
+  const scope = folder === ALL ? undefined : folder;
 
   const { data: companies, isLoading: companiesLoading } = useKnowledgeCompanies();
-  const { data: documents, isLoading, isFetching } = useKnowledgeDocuments({ company: folder === ALL ? undefined : folder, q: debouncedText });
+  const { data: documents, isLoading, isFetching } = useKnowledgeDocuments({ company: scope, q: searchMode === "quick" ? debouncedText : undefined });
+  const find = useFindKnowledgeDocuments({ q: searchMode === "deep" ? deepQuery : "", company: scope });
   const { data: stats } = useKnowledgeStats();
   const createDocument = useCreateKnowledgeDocument();
   const updateDocument = useUpdateKnowledgeDocument();
@@ -130,8 +157,39 @@ export default function OmnichannelKnowledgeBasePage() {
     setUploadTarget(next === ALL ? NONE : next);
   }
 
+  function runDeepSearch() {
+    if (textFilter.trim().length < MIN_DEEP_QUERY) {
+      toast.error(`Scrivi almeno ${MIN_DEEP_QUERY} caratteri`);
+      return;
+    }
+    setDeepQuery(textFilter);
+  }
+
+  function switchMode(mode: SearchMode) {
+    setSearchMode(mode);
+    // Passando ad "avanzata" con del testo gia' scritto si cerca subito.
+    if (mode === "deep") setDeepQuery(textFilter);
+  }
+
+  function clearSearch() {
+    setTextFilter("");
+    setDeepQuery("");
+  }
+
+  function onSearchKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter" && searchMode === "deep") {
+      e.preventDefault();
+      runDeepSearch();
+    } else if (e.key === "Escape") {
+      clearSearch();
+    }
+  }
+
   const docs = (documents ?? []).filter((d) => d.kind !== "instruction");
   const instructions = (documents ?? []).filter((d) => d.kind === "instruction");
+  const foundDocs = (find.data?.hits ?? []).filter((h) => h.document.kind !== "instruction");
+  const foundInstructions = (find.data?.hits ?? []).filter((h) => h.document.kind === "instruction");
+  const highlightTerms = useMemo(() => (deepActive ? searchTerms(deepQuery) : []), [deepActive, deepQuery]);
   const stalledDocs = (documents ?? []).filter((d) => d.embedded_chunks < d.chunk_count && d.error_message);
   const pendingEmbeddings = stalledDocs.reduce((sum, d) => sum + d.chunk_count - d.embedded_chunks, 0);
 
@@ -231,6 +289,7 @@ export default function OmnichannelKnowledgeBasePage() {
 
   const saving = createDocument.isPending || updateDocument.isPending;
   const folderTitle = currentCompany ? currentCompany.name : folder === NONE ? "Senza azienda" : "Tutte le aziende";
+  const scopeLabel = currentCompany ? currentCompany.name : folder === NONE ? '"Senza azienda"' : "tutte le aziende";
 
   return (
     <div>
@@ -302,20 +361,61 @@ export default function OmnichannelKnowledgeBasePage() {
 
           <Tabs defaultValue="documents">
             <TabsList>
-              <TabsTrigger value="documents"><FileTextIcon /> Documenti{documents ? ` (${docs.length})` : ""}</TabsTrigger>
-              <TabsTrigger value="instructions"><WandSparklesIcon /> Istruzioni{documents ? ` (${instructions.length})` : ""}</TabsTrigger>
+              <TabsTrigger value="documents">
+                <FileTextIcon /> Documenti{deepActive ? (find.data ? ` (${foundDocs.length})` : "") : documents ? ` (${docs.length})` : ""}
+              </TabsTrigger>
+              <TabsTrigger value="instructions">
+                <WandSparklesIcon /> Istruzioni{deepActive ? (find.data ? ` (${foundInstructions.length})` : "") : documents ? ` (${instructions.length})` : ""}
+              </TabsTrigger>
               <TabsTrigger value="test"><FlaskConicalIcon /> Prova il bot</TabsTrigger>
             </TabsList>
 
-            <div className="relative mt-4">
-              <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                className="pl-8"
-                value={textFilter}
-                onChange={(e) => setTextFilter(e.target.value)}
-                placeholder={`Cerca per titolo, file o contenuto in ${currentCompany ? currentCompany.name : folder === NONE ? "Senza azienda" : "tutte le aziende"}...`}
-              />
-              {isFetching && !isLoading && <Loader2Icon className="absolute top-1/2 right-2.5 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />}
+            <div className="mt-4 space-y-2">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <div className="relative flex-1">
+                  <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    className="pr-9 pl-8"
+                    value={textFilter}
+                    onChange={(e) => setTextFilter(e.target.value)}
+                    onKeyDown={onSearchKeyDown}
+                    aria-label={searchMode === "quick" ? "Filtra l'elenco" : "Ricerca avanzata"}
+                    placeholder={
+                      searchMode === "quick"
+                        ? `Filtra per titolo, file o parole nel testo in ${scopeLabel}...`
+                        : `Nome di un file o argomento da cercare in ${scopeLabel}, poi Invio...`
+                    }
+                  />
+                  {(isFetching && !isLoading) || find.isFetching ? (
+                    <Loader2Icon className="absolute top-1/2 right-2.5 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />
+                  ) : textFilter ? (
+                    <button
+                      type="button"
+                      onClick={clearSearch}
+                      aria-label="Svuota la ricerca"
+                      className="absolute top-1/2 right-1.5 flex size-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                    >
+                      <XIcon className="size-4" />
+                    </button>
+                  ) : null}
+                </div>
+                <div className="flex gap-2">
+                  <div role="group" aria-label="Tipo di ricerca" className="inline-flex h-9 rounded-md border bg-background p-0.5">
+                    <ModeButton active={searchMode === "quick"} onClick={() => switchMode("quick")} icon={SearchIcon} label="Rapida" />
+                    <ModeButton active={searchMode === "deep"} onClick={() => switchMode("deep")} icon={SparklesIcon} label="Avanzata" />
+                  </div>
+                  {searchMode === "deep" && (
+                    <Button className="h-9" onClick={runDeepSearch} disabled={find.isFetching || textFilter.trim().length < MIN_DEEP_QUERY}>
+                      {find.isFetching ? <Loader2Icon className="animate-spin" /> : <SearchIcon />} Cerca
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {searchMode === "quick"
+                  ? "Filtra l'elenco mentre scrivi. Per trovare i file che parlano di un argomento, anche con parole diverse, passa ad Avanzata."
+                  : "Trova i file per nome e quelli in cui si parla di quello che scrivi, anche con parole diverse: è lo stesso motore che usa il bot. Premi Invio o Cerca."}
+              </p>
             </div>
 
             <TabsContent value="documents" className="mt-4 space-y-4">
@@ -367,7 +467,25 @@ export default function OmnichannelKnowledgeBasePage() {
                 />
               )}
 
-              {isLoading ? (
+              {deepActive ? (
+                <FindResults
+                  kind="document"
+                  query={deepQuery}
+                  hits={foundDocs}
+                  loading={find.isLoading}
+                  fetching={find.isFetching}
+                  error={find.error}
+                  warning={find.data?.warning ?? null}
+                  terms={highlightTerms}
+                  showCompany={folder === ALL}
+                  selected={selected}
+                  onToggle={toggleSelected}
+                  openingId={loadingEditorId}
+                  onEdit={(doc) => void openEditor(doc)}
+                  onDelete={(doc) => setDeleteId(doc.id)}
+                  onClear={clearSearch}
+                />
+              ) : isLoading ? (
                 <ListSkeleton />
               ) : docs.length === 0 ? (
                 <EmptyState
@@ -421,7 +539,25 @@ export default function OmnichannelKnowledgeBasePage() {
                 />
               )}
 
-              {isLoading ? (
+              {deepActive ? (
+                <FindResults
+                  kind="instruction"
+                  query={deepQuery}
+                  hits={foundInstructions}
+                  loading={find.isLoading}
+                  fetching={find.isFetching}
+                  error={find.error}
+                  warning={find.data?.warning ?? null}
+                  terms={highlightTerms}
+                  showCompany={folder === ALL}
+                  selected={selected}
+                  onToggle={toggleSelected}
+                  openingId={loadingEditorId}
+                  onEdit={(doc) => void openEditor(doc)}
+                  onDelete={(doc) => setDeleteId(doc.id)}
+                  onClear={clearSearch}
+                />
+              ) : isLoading ? (
                 <ListSkeleton />
               ) : instructions.length === 0 ? (
                 <EmptyState
@@ -967,6 +1103,8 @@ function DocumentRow({
   opening,
   onEdit,
   onDelete,
+  highlight,
+  extra,
 }: {
   doc: OmniKnowledgeDocumentResponse;
   showCompany: boolean;
@@ -975,6 +1113,10 @@ function DocumentRow({
   opening: boolean;
   onEdit: () => void;
   onDelete: () => void;
+  // Parole da evidenziare in titolo e nome del file (ricerca avanzata).
+  highlight?: string[];
+  // Al posto dell'anteprima: i passaggi trovati dalla ricerca avanzata.
+  extra?: ReactNode;
 }) {
   const indexing = doc.embedded_chunks < doc.chunk_count && !doc.error_message;
   return (
@@ -983,7 +1125,7 @@ function DocumentRow({
         <div className="flex min-w-0 items-start gap-3">
           <Checkbox className="mt-0.5" checked={selected} onCheckedChange={onToggle} aria-label={`Seleziona ${doc.title}`} />
           <div className="min-w-0 space-y-1">
-            <p className="truncate text-sm font-medium">{doc.title}</p>
+            <p className="truncate text-sm font-medium"><Highlight text={doc.title} terms={highlight} /></p>
             <div className="flex flex-wrap items-center gap-1.5">
               {doc.kind === "instruction" ? (
                 doc.always_on ? <Badge>Sempre attiva</Badge> : <Badge variant="secondary">Quando pertinente</Badge>
@@ -994,7 +1136,7 @@ function DocumentRow({
               {doc.kind !== "instruction" && (
                 <span className="text-xs text-muted-foreground">
                   {doc.chunk_count} {doc.chunk_count === 1 ? "blocco" : "blocchi"}
-                  {doc.file_name ? ` · ${doc.file_name}` : ""}
+                  {doc.file_name && <> · <Highlight text={doc.file_name} terms={highlight} /></>}
                 </span>
               )}
               {indexing && (
@@ -1013,8 +1155,145 @@ function DocumentRow({
           <Button size="icon-sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={onDelete} aria-label="Elimina"><Trash2Icon /></Button>
         </div>
       </div>
-      {doc.preview && <p className="mt-2 line-clamp-3 pl-7 text-sm whitespace-pre-line text-muted-foreground">{doc.preview}</p>}
+      {!extra && doc.preview && <p className="mt-2 line-clamp-3 pl-7 text-sm whitespace-pre-line text-muted-foreground">{doc.preview}</p>}
+      {extra}
       {doc.error_message && <p className="mt-2 pl-7 text-xs text-amber-700 dark:text-amber-400">{doc.error_message}</p>}
+    </div>
+  );
+}
+
+function ModeButton({ active, onClick, icon: Icon, label }: { active: boolean; onClick: () => void; icon: typeof SearchIcon; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`inline-flex items-center gap-1.5 rounded px-2.5 text-sm transition-colors ${active ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+    >
+      <Icon className="size-3.5" /> {label}
+    </button>
+  );
+}
+
+function Highlight({ text, terms }: { text: string; terms?: string[] }) {
+  if (!terms?.length) return <>{text}</>;
+  const pattern = new RegExp(`(${terms.map(escapeRegExp).join("|")})`, "giu");
+  // split con un gruppo catturante: le posizioni dispari sono le parole trovate.
+  return (
+    <>
+      {text.split(pattern).map((part, index) =>
+        index % 2 === 1 ? (
+          <mark key={index} className="rounded-sm bg-amber-200/70 px-0.5 text-inherit dark:bg-amber-400/30">{part}</mark>
+        ) : (
+          part
+        )
+      )}
+    </>
+  );
+}
+
+function FindResults({
+  kind,
+  query,
+  hits,
+  loading,
+  fetching,
+  error,
+  warning,
+  terms,
+  showCompany,
+  selected,
+  onToggle,
+  openingId,
+  onEdit,
+  onDelete,
+  onClear,
+}: {
+  kind: OmniKnowledgeKind;
+  query: string;
+  hits: OmniKnowledgeFindHit[];
+  loading: boolean;
+  fetching: boolean;
+  error: unknown;
+  warning: string | null;
+  terms: string[];
+  showCompany: boolean;
+  selected: Set<string>;
+  onToggle: (id: string) => void;
+  openingId: string | null;
+  onEdit: (doc: OmniKnowledgeDocumentResponse) => void;
+  onDelete: (doc: OmniKnowledgeDocumentResponse) => void;
+  onClear: () => void;
+}) {
+  const noun = kind === "instruction" ? "istruzione" : "documento";
+  const nounPlural = kind === "instruction" ? "istruzioni" : "documenti";
+
+  if (loading) return <ListSkeleton />;
+  if (error) {
+    return (
+      <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+        {errorMessage(error, "Ricerca non riuscita")}
+      </div>
+    );
+  }
+  if (!hits.length) {
+    return (
+      <EmptyState
+        icon={SearchIcon}
+        title={`Nessun ${noun} trovato per “${query.trim()}”`}
+        description={`Prova con altre parole${showCompany ? "" : " o cerca in tutte le aziende"}. Un file appena caricato si trova per contenuto solo quando l'indicizzazione è finita.`}
+        action={<Button variant="outline" onClick={onClear}><XIcon /> Mostra tutti i {nounPlural}</Button>}
+      />
+    );
+  }
+
+  return (
+    <div className={`space-y-3 ${fetching ? "opacity-70 transition-opacity" : ""}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+        <p>
+          <span className="font-medium">{hits.length} {hits.length === 1 ? noun : nounPlural}</span>{" "}
+          <span className="text-muted-foreground">per “{query.trim()}” · prima quelli trovati per nome, poi per contenuto</span>
+        </p>
+        <Button size="sm" variant="ghost" onClick={onClear}><XIcon /> Chiudi ricerca</Button>
+      </div>
+      {warning && (
+        <p className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">{warning}</p>
+      )}
+      {hits.map((hit) => (
+        <DocumentRow
+          key={hit.document.id}
+          doc={hit.document}
+          showCompany={showCompany}
+          selected={selected.has(hit.document.id)}
+          onToggle={() => onToggle(hit.document.id)}
+          opening={openingId === hit.document.id}
+          onEdit={() => onEdit(hit.document)}
+          onDelete={() => onDelete(hit.document)}
+          highlight={terms}
+          extra={<HitDetails hit={hit} terms={terms} />}
+        />
+      ))}
+    </div>
+  );
+}
+
+function HitDetails({ hit, terms }: { hit: OmniKnowledgeFindHit; terms: string[] }) {
+  return (
+    <div className="mt-2 space-y-2 pl-7">
+      <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+        <span>Trovato per</span>
+        {hit.matched_by.map((how) => (
+          <Badge key={how} variant={how === "nome" ? "default" : "secondary"}>{MATCH_LABELS[how] ?? how}</Badge>
+        ))}
+      </div>
+      {hit.snippets.map((snippet, index) => (
+        <blockquote key={index} className="rounded-md border-l-2 border-primary/40 bg-muted/40 px-3 py-2">
+          <p className="text-sm whitespace-pre-line text-muted-foreground"><Highlight text={snippet.content} terms={terms} /></p>
+          {snippet.similarity != null && !snippet.matched_by.includes("testo") && (
+            <p className="mt-1 text-[11px] text-muted-foreground">trovato per significato · somiglianza {Math.round(snippet.similarity * 100)}%</p>
+          )}
+        </blockquote>
+      ))}
     </div>
   );
 }

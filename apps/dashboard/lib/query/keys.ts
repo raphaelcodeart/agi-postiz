@@ -60,6 +60,7 @@ export const queryKeys = {
     knowledgeBase: () => ["omnichannel", "knowledge-base"] as const,
     knowledgeDocuments: (params?: unknown) => ["omnichannel", "knowledge-base", "documents", params] as const,
     knowledgeDocument: (id: string) => ["omnichannel", "knowledge-base", "document", id] as const,
+    knowledgeFind: (params?: unknown) => ["omnichannel", "knowledge-base", "find", params] as const,
     knowledgeCompanies: () => ["omnichannel", "knowledge-base", "companies"] as const,
     knowledgeStats: () => ["omnichannel", "knowledge-base", "stats"] as const,
     notifications: (unreadOnly?: boolean) => ["omnichannel", "notifications", unreadOnly] as const,
